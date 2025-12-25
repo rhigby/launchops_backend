@@ -21,13 +21,14 @@ app.use(morgan("dev"));
 
 app.use(
   cors({
-    origin: (origin, cb) => {
+    origin: (origin: string | undefined, cb: (err: Error | null, allow?: boolean) => void) => {
       if (!origin) return cb(null, true);
       if (config.corsOrigins.includes(origin)) return cb(null, true);
-      return cb(new Error("CORS blocked"), false);
+      return cb(new Error("CORS blocked"));
     }
   })
 );
+
 
 app.get("/api/health", h.health);
 
