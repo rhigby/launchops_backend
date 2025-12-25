@@ -1,0 +1,18 @@
+# env
+**/.env
+**/.env.*
+!.env.example
+
+# node / build
+**/node_modules
+**/dist
+**/.vite
+
+# databases
+**/*.db
+**/*.sqlite
+**/data
+
+# OS
+.DS_Store
+Thumbs.db
