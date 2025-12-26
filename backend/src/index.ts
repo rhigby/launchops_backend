@@ -57,10 +57,21 @@ app.get("/api/checklists/:id", requireAuth, h.getChecklist);
 app.post("/api/checklists/:id/steps", requireAuth, h.addStep);
 app.post("/api/checklists/:id/steps/:stepId/toggle", requireAuth, h.toggleStep);
 
+app.delete("/api/checklists/:id", requireAuth, h.deleteChecklist);
+app.delete("/api/checklists/:id/steps/:stepId", requireAuth, h.deleteChecklistStep);
+
+
 app.get("/api/incidents", requireAuth, h.listIncidents);
 app.post("/api/incidents", requireAuth, h.createIncident);
 app.post("/api/incidents/:id/updates", requireAuth, h.addIncidentUpdate);
 app.patch("/api/incidents/:id/status", requireAuth, h.patchIncidentStatus);
+
+app.delete("/api/incidents/:id", requireAuth, h.deleteIncident);
+
+app.get("/api/messages/threads", requireAuth, h.listMessageThreads);
+app.get("/api/messages/with/:other", requireAuth, h.getConversation);
+app.post("/api/messages", requireAuth, h.sendMessage);
+
 
   app.listen(config.port, () => {
     console.log(`LaunchOps API listening on http://localhost:${config.port}`);
