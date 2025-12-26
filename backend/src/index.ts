@@ -11,9 +11,10 @@ import { migrate } from "./db.js";
 import { rateLimit, requireAuth } from "./middleware.js";
 import * as h from "./routes.js";
 
-migrate();
+async function main() {
+  await migrate();
 
-const app = express();
+  const app = express();
 
 app.use(helmet());
 app.use(express.json({ limit: "256kb" }));
@@ -53,7 +54,13 @@ app.post("/api/incidents", requireAuth, h.createIncident);
 app.post("/api/incidents/:id/updates", requireAuth, h.addIncidentUpdate);
 app.patch("/api/incidents/:id/status", requireAuth, h.patchIncidentStatus);
 
-app.listen(config.port, () => {
-  console.log(`LaunchOps API listening on http://localhost:${config.port}`);
-  console.log(`Docs: http://localhost:${config.port}/api/docs`);
+  app.listen(config.port, () => {
+    console.log(`LaunchOps API listening on http://localhost:${config.port}`);
+    console.log(`Docs: http://localhost:${config.port}/api/docs`);
+  });
+}
+
+main().catch((err) => {
+  console.error("Fatal startup error:", err);
+  process.exit(1);
 });

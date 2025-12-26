@@ -16,7 +16,9 @@ export const config = {
     .filter(Boolean),
   auth0Domain: required("AUTH0_DOMAIN"),
   auth0Audience: required("AUTH0_AUDIENCE"),
-  sqlitePath: process.env.SQLITE_PATH || "./data/launchops.db",
+  // Render Postgres connection string
+  // Prefer Render's INTERNAL DATABASE_URL for backend-to-db traffic.
+  databaseUrl: required("DATABASE_URL"),
   rateLimitPoints: Number(process.env.RATE_LIMIT_POINTS || 60),
   rateLimitDurationSeconds: Number(process.env.RATE_LIMIT_DURATION_SECONDS || 60),
 } as const;

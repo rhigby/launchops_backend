@@ -1,7 +1,13 @@
 import type { Request, Response } from "express";
 import { nanoid } from "nanoid";
-import { db, audit, nowIso, seedIfEmpty } from "./db.js";
-import { addIncidentUpdateSchema, addStepSchema, createChecklistSchema, createIncidentSchema, patchIncidentStatusSchema } from "./validators.js";
+import { audit, nowIso, pool, seedIfEmpty } from "./db.js";
+import {
+  addIncidentUpdateSchema,
+  addStepSchema,
+  createChecklistSchema,
+  createIncidentSchema,
+  patchIncidentStatusSchema,
+} from "./validators.js";
 
 const userLabel = (req: Request) => req.user?.email || req.user?.name || req.user?.sub || "user";
 
@@ -13,58 +19,108 @@ export function me(req: Request, res: Response) {
   res.json({ user: req.user });
 }
 
-export function listChecklists(req: Request, res: Response) {
-  const u = req.user!;
-  seedIfEmpty(u.sub, userLabel(req));
+// -----------------------------------------------------------------------------
+// Checklists
+// -----------------------------------------------------------------------------
 
-  const rows = db.prepare(`SELECT id, title, created_at FROM checklists WHERE user_sub = ? ORDER BY created_at DESC`).all(u.sub) as any[];
-  const checklists = rows.map((r) => {
-    const steps = db.prepare(`SELECT id, label, done, updated_at, updated_by FROM checklist_steps WHERE checklist_id = ? ORDER BY rowid ASC`).all(r.id) as any[];
-    return {
+export async function listChecklists(req: Request, res: Response) {
+  const u = req.user!;
+  await seedIfEmpty(u.sub, userLabel(req));
+
+  const rows = await pool.query(
+    `SELECT id, title, created_at
+     FROM checklists
+     WHERE user_sub = $1
+     ORDER BY created_at DESC`,
+    [u.sub]
+  );
+
+  const checklists = [] as any[];
+  for (const r of rows.rows) {
+    const steps = await pool.query(
+      `SELECT id, label, done, updated_at, updated_by
+       FROM checklist_steps
+       WHERE checklist_id = $1
+       ORDER BY updated_at ASC, id ASC`,
+      [r.id]
+    );
+
+    checklists.push({
       id: r.id,
       title: r.title,
       createdAt: r.created_at,
-      steps: steps.map((s) => ({ id: s.id, label: s.label, done: !!s.done, updatedAt: s.updated_at, updatedBy: s.updated_by }))
-    };
-  });
+      steps: steps.rows.map((s) => ({
+        id: s.id,
+        label: s.label,
+        done: !!s.done,
+        updatedAt: s.updated_at,
+        updatedBy: s.updated_by,
+      })),
+    });
+  }
 
   res.json(checklists);
 }
 
-export function createChecklist(req: Request, res: Response) {
+export async function createChecklist(req: Request, res: Response) {
   const u = req.user!;
   const parsed = createChecklistSchema.safeParse(req.body);
   if (!parsed.success) return res.status(400).json({ error: "validation", details: parsed.error.flatten() });
 
   const id = nanoid();
   const createdAt = nowIso();
-  db.prepare(`INSERT INTO checklists (id, user_sub, title, created_at) VALUES (?, ?, ?, ?)`).run(id, u.sub, parsed.data.title, createdAt);
-  audit(u.sub, "create", "checklist", id, { title: parsed.data.title });
+
+  await pool.query(
+    `INSERT INTO checklists (id, user_sub, title, created_at)
+     VALUES ($1, $2, $3, $4)`,
+    [id, u.sub, parsed.data.title, createdAt]
+  );
+
+  await audit(u.sub, "create", "checklist", id, { title: parsed.data.title });
   res.status(201).json({ id, title: parsed.data.title, createdAt, steps: [] });
 }
 
-export function getChecklist(req: Request, res: Response) {
+export async function getChecklist(req: Request, res: Response) {
   const u = req.user!;
   const id = req.params.id;
 
-  const c = db.prepare(`SELECT id, title, created_at FROM checklists WHERE user_sub = ? AND id = ?`).get(u.sub, id) as any;
-  if (!c) return res.status(404).json({ error: "not_found" });
+  const c = await pool.query(
+    `SELECT id, title, created_at
+     FROM checklists
+     WHERE user_sub = $1 AND id = $2`,
+    [u.sub, id]
+  );
+  if (c.rowCount === 0) return res.status(404).json({ error: "not_found" });
 
-  const steps = db.prepare(`SELECT id, label, done, updated_at, updated_by FROM checklist_steps WHERE checklist_id = ? ORDER BY rowid ASC`).all(id) as any[];
+  const steps = await pool.query(
+    `SELECT id, label, done, updated_at, updated_by
+     FROM checklist_steps
+     WHERE checklist_id = $1
+     ORDER BY updated_at ASC, id ASC`,
+    [id]
+  );
+
+  const row = c.rows[0];
   res.json({
-    id: c.id,
-    title: c.title,
-    createdAt: c.created_at,
-    steps: steps.map((s) => ({ id: s.id, label: s.label, done: !!s.done, updatedAt: s.updated_at, updatedBy: s.updated_by }))
+    id: row.id,
+    title: row.title,
+    createdAt: row.created_at,
+    steps: steps.rows.map((s) => ({
+      id: s.id,
+      label: s.label,
+      done: !!s.done,
+      updatedAt: s.updated_at,
+      updatedBy: s.updated_by,
+    })),
   });
 }
 
-export function addStep(req: Request, res: Response) {
+export async function addStep(req: Request, res: Response) {
   const u = req.user!;
   const checklistId = req.params.id;
 
-  const exists = db.prepare(`SELECT id FROM checklists WHERE user_sub = ? AND id = ?`).get(u.sub, checklistId) as any;
-  if (!exists) return res.status(404).json({ error: "not_found" });
+  const exists = await pool.query(`SELECT 1 FROM checklists WHERE user_sub = $1 AND id = $2`, [u.sub, checklistId]);
+  if (exists.rowCount === 0) return res.status(404).json({ error: "not_found" });
 
   const parsed = addStepSchema.safeParse(req.body);
   if (!parsed.success) return res.status(400).json({ error: "validation", details: parsed.error.flatten() });
@@ -73,75 +129,108 @@ export function addStep(req: Request, res: Response) {
   const updatedAt = nowIso();
   const updatedBy = userLabel(req);
 
-  db.prepare(`INSERT INTO checklist_steps (id, checklist_id, label, done, updated_at, updated_by)
-              VALUES (?, ?, ?, 0, ?, ?)`).run(stepId, checklistId, parsed.data.label, updatedAt, updatedBy);
+  await pool.query(
+    `INSERT INTO checklist_steps (id, checklist_id, label, done, updated_at, updated_by)
+     VALUES ($1, $2, $3, FALSE, $4, $5)`,
+    [stepId, checklistId, parsed.data.label, updatedAt, updatedBy]
+  );
 
-  audit(u.sub, "add_step", "checklist", checklistId, { stepId, label: parsed.data.label });
+  await audit(u.sub, "add_step", "checklist", checklistId, { stepId, label: parsed.data.label });
   res.status(201).json({ id: stepId, label: parsed.data.label, done: false, updatedAt, updatedBy });
 }
 
-export function toggleStep(req: Request, res: Response) {
+export async function toggleStep(req: Request, res: Response) {
   const u = req.user!;
   const checklistId = req.params.id;
   const stepId = req.params.stepId;
 
-  const exists = db.prepare(`SELECT id FROM checklists WHERE user_sub = ? AND id = ?`).get(u.sub, checklistId) as any;
-  if (!exists) return res.status(404).json({ error: "not_found" });
+  const exists = await pool.query(`SELECT 1 FROM checklists WHERE user_sub = $1 AND id = $2`, [u.sub, checklistId]);
+  if (exists.rowCount === 0) return res.status(404).json({ error: "not_found" });
 
-  const s = db.prepare(`SELECT id, done FROM checklist_steps WHERE checklist_id = ? AND id = ?`).get(checklistId, stepId) as any;
-  if (!s) return res.status(404).json({ error: "not_found" });
+  const s = await pool.query(
+    `SELECT id, done FROM checklist_steps WHERE checklist_id = $1 AND id = $2`,
+    [checklistId, stepId]
+  );
+  if (s.rowCount === 0) return res.status(404).json({ error: "not_found" });
 
-  const nextDone = s.done ? 0 : 1;
+  const nextDone = !s.rows[0].done;
   const updatedAt = nowIso();
   const updatedBy = userLabel(req);
 
-  db.prepare(`UPDATE checklist_steps SET done = ?, updated_at = ?, updated_by = ? WHERE id = ? AND checklist_id = ?`)
-    .run(nextDone, updatedAt, updatedBy, stepId, checklistId);
+  await pool.query(
+    `UPDATE checklist_steps
+     SET done = $1, updated_at = $2, updated_by = $3
+     WHERE id = $4 AND checklist_id = $5`,
+    [nextDone, updatedAt, updatedBy, stepId, checklistId]
+  );
 
-  audit(u.sub, "toggle_step", "checklist", checklistId, { stepId, done: !!nextDone });
-  res.json({ ok: true, stepId, done: !!nextDone, updatedAt, updatedBy });
+  await audit(u.sub, "toggle_step", "checklist", checklistId, { stepId, done: nextDone });
+  res.json({ ok: true, stepId, done: nextDone, updatedAt, updatedBy });
 }
 
-export function listIncidents(req: Request, res: Response) {
-  const u = req.user!;
-  seedIfEmpty(u.sub, userLabel(req));
+// -----------------------------------------------------------------------------
+// Incidents
+// -----------------------------------------------------------------------------
 
-  const incidents = db.prepare(`SELECT id, title, severity, status, created_at FROM incidents WHERE user_sub = ? ORDER BY created_at DESC`).all(u.sub) as any[];
-  const mapped = incidents.map((i) => {
-    const updates = db.prepare(`SELECT id, note, by, at FROM incident_updates WHERE incident_id = ? ORDER BY at DESC`).all(i.id) as any[];
-    return {
+export async function listIncidents(req: Request, res: Response) {
+  const u = req.user!;
+  await seedIfEmpty(u.sub, userLabel(req));
+
+  const incidents = await pool.query(
+    `SELECT id, title, severity, status, created_at
+     FROM incidents
+     WHERE user_sub = $1
+     ORDER BY created_at DESC`,
+    [u.sub]
+  );
+
+  const mapped = [] as any[];
+  for (const i of incidents.rows) {
+    const updates = await pool.query(
+      `SELECT id, note, by, at
+       FROM incident_updates
+       WHERE incident_id = $1
+       ORDER BY at DESC`,
+      [i.id]
+    );
+
+    mapped.push({
       id: i.id,
       title: i.title,
       severity: i.severity,
       status: i.status,
       createdAt: i.created_at,
-      updates: updates.map((u) => ({ id: u.id, note: u.note, by: u.by, at: u.at }))
-    };
-  });
+      updates: updates.rows.map((u) => ({ id: u.id, note: u.note, by: u.by, at: u.at })),
+    });
+  }
 
   res.json(mapped);
 }
 
-export function createIncident(req: Request, res: Response) {
+export async function createIncident(req: Request, res: Response) {
   const u = req.user!;
   const parsed = createIncidentSchema.safeParse(req.body);
   if (!parsed.success) return res.status(400).json({ error: "validation", details: parsed.error.flatten() });
 
   const id = nanoid();
   const createdAt = nowIso();
-  db.prepare(`INSERT INTO incidents (id, user_sub, title, severity, status, created_at) VALUES (?, ?, ?, ?, ?, ?)`)
-    .run(id, u.sub, parsed.data.title, parsed.data.severity, "open", createdAt);
 
-  audit(u.sub, "create", "incident", id, { title: parsed.data.title, severity: parsed.data.severity });
+  await pool.query(
+    `INSERT INTO incidents (id, user_sub, title, severity, status, created_at)
+     VALUES ($1, $2, $3, $4, $5, $6)`,
+    [id, u.sub, parsed.data.title, parsed.data.severity, "open", createdAt]
+  );
+
+  await audit(u.sub, "create", "incident", id, { title: parsed.data.title, severity: parsed.data.severity });
   res.status(201).json({ id, title: parsed.data.title, severity: parsed.data.severity, status: "open", createdAt, updates: [] });
 }
 
-export function addIncidentUpdate(req: Request, res: Response) {
+export async function addIncidentUpdate(req: Request, res: Response) {
   const u = req.user!;
   const incidentId = req.params.id;
 
-  const exists = db.prepare(`SELECT id FROM incidents WHERE user_sub = ? AND id = ?`).get(u.sub, incidentId) as any;
-  if (!exists) return res.status(404).json({ error: "not_found" });
+  const exists = await pool.query(`SELECT 1 FROM incidents WHERE user_sub = $1 AND id = $2`, [u.sub, incidentId]);
+  if (exists.rowCount === 0) return res.status(404).json({ error: "not_found" });
 
   const parsed = addIncidentUpdateSchema.safeParse(req.body);
   if (!parsed.success) return res.status(400).json({ error: "validation", details: parsed.error.flatten() });
@@ -150,25 +239,28 @@ export function addIncidentUpdate(req: Request, res: Response) {
   const at = nowIso();
   const by = userLabel(req);
 
-  db.prepare(`INSERT INTO incident_updates (id, incident_id, note, by, at) VALUES (?, ?, ?, ?, ?)`)
-    .run(id, incidentId, parsed.data.note, by, at);
+  await pool.query(
+    `INSERT INTO incident_updates (id, incident_id, note, by, at)
+     VALUES ($1, $2, $3, $4, $5)`,
+    [id, incidentId, parsed.data.note, by, at]
+  );
 
-  audit(u.sub, "add_update", "incident", incidentId, { updateId: id });
+  await audit(u.sub, "add_update", "incident", incidentId, { updateId: id });
   res.status(201).json({ id, note: parsed.data.note, by, at });
 }
 
-export function patchIncidentStatus(req: Request, res: Response) {
+export async function patchIncidentStatus(req: Request, res: Response) {
   const u = req.user!;
   const incidentId = req.params.id;
 
-  const exists = db.prepare(`SELECT id FROM incidents WHERE user_sub = ? AND id = ?`).get(u.sub, incidentId) as any;
-  if (!exists) return res.status(404).json({ error: "not_found" });
+  const exists = await pool.query(`SELECT 1 FROM incidents WHERE user_sub = $1 AND id = $2`, [u.sub, incidentId]);
+  if (exists.rowCount === 0) return res.status(404).json({ error: "not_found" });
 
   const parsed = patchIncidentStatusSchema.safeParse(req.body);
   if (!parsed.success) return res.status(400).json({ error: "validation", details: parsed.error.flatten() });
 
-  db.prepare(`UPDATE incidents SET status = ? WHERE id = ? AND user_sub = ?`).run(parsed.data.status, incidentId, u.sub);
-  audit(u.sub, "status", "incident", incidentId, { status: parsed.data.status });
+  await pool.query(`UPDATE incidents SET status = $1 WHERE id = $2 AND user_sub = $3`, [parsed.data.status, incidentId, u.sub]);
+  await audit(u.sub, "status", "incident", incidentId, { status: parsed.data.status });
 
   res.json({ ok: true, id: incidentId, status: parsed.data.status });
 }
