@@ -360,17 +360,12 @@ export async function pingPresence(req: Request, res: Response) {
 }
 
 export async function listOnline(req: Request, res: Response) {
-  const rows = await pool.query(
-    `SELECT user_sub as "userSub",
-            display_name,
-            page,
-            handle,
-            label,
-            last_seen as "lastSeen"
-     FROM presence
-     WHERE last_seen > (NOW() - INTERVAL '90 seconds')
-     ORDER BY last_seen DESC
-     LIMIT 50`
-  );
-  res.json(rows.rows);
+    const rows = await pool.query(`
+      SELECT user_sub, display_name, page
+      FROM presence
+      WHERE last_seen_at > NOW() - INTERVAL '90 seconds'
+      ORDER BY display_name
+    `);
+    res.json(rows.rows);
+
 }
