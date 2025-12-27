@@ -332,17 +332,21 @@ export async function pingPresence(req: Request, res: Response) {
     return res.status(400).json({ error: "validation", details: parsed.error.flatten() });
   }
 
+  // Safely read optional claims from the authenticated user object
   const claims = u as Record<string, unknown>;
 
-  const displayName =
+  // What we show in the UI (human-friendly)
+  const label =
     (typeof claims["name"] === "string" && claims["name"]) ||
     (typeof claims["nickname"] === "string" && claims["nickname"]) ||
     (typeof claims["email"] === "string" && claims["email"]) ||
-    userLabel(req) ||
+    u.email ||
+    u.name ||
     u.sub ||
     "user";
 
-  const handle = toHandle(displayName) || u.sub || "user";
+  // What we use for @mentions / stable identity
+  const handle = toHandle(label) || u.sub || "user";
   const now = nowIso();
 
   await pool.query(
@@ -353,19 +357,27 @@ export async function pingPresence(req: Request, res: Response) {
        label = EXCLUDED.label,
        last_seen = EXCLUDED.last_seen,
        page = EXCLUDED.page`,
-    [u.sub, handle, displayName, now, parsed.data.page || null]
+    [u.sub, handle, label, now, parsed.data.page || null]
   );
 
   res.json({ ok: true });
 }
 
 export async function listOnline(req: Request, res: Response) {
-    const rows = await pool.query(`
-      SELECT user_sub, display_name, page
-      FROM presence
-      WHERE last_seen_at > NOW() - INTERVAL '90 seconds'
-      ORDER BY display_name
-    `);
-    res.json(rows.rows);
+  const rows = await pool.query(
+    `SELECT
+        user_sub as "userSub",
+        label as "displayName",
+        page,
+        handle,
+        label,
+        last_seen as "lastSeen"
+     FROM presence
+     WHERE last_seen > (NOW() - INTERVAL '90 seconds')
+     ORDER BY last_seen DESC
+     LIMIT 50`
+  );
 
+  res.json(rows.rows);
 }
+
