@@ -189,12 +189,13 @@ export async function listIncidents(req: Request, res: Response) {
   const mapped = [] as any[];
   for (const i of incidents.rows) {
     const updates = await pool.query(
-      `SELECT id, note, by_label as "by", at
-      FROM incident_updates
-      WHERE incident_id = $1
-      ORDER BY at DESC`,
-      [i.id]
-    );
+    `SELECT id, note, by_label as "by", at
+    FROM incident_updates
+    WHERE incident_id = $1 AND user_sub = $2
+    ORDER BY at DESC`,
+    [i.id, u.sub]
+  );
+
 
     mapped.push({
       id: i.id,
@@ -231,25 +232,31 @@ export async function addIncidentUpdate(req: Request, res: Response) {
   const u = req.user!;
   const incidentId = req.params.id;
 
-  const exists = await pool.query(`SELECT 1 FROM incidents WHERE user_sub = $1 AND id = $2`, [u.sub, incidentId]);
+  const exists = await pool.query(
+    `SELECT 1 FROM incidents WHERE user_sub = $1 AND id = $2`,
+    [u.sub, incidentId]
+  );
   if (exists.rowCount === 0) return res.status(404).json({ error: "not_found" });
 
   const parsed = addIncidentUpdateSchema.safeParse(req.body);
-  if (!parsed.success) return res.status(400).json({ error: "validation", details: parsed.error.flatten() });
+  if (!parsed.success) {
+    return res.status(400).json({ error: "validation", details: parsed.error.flatten() });
+  }
 
   const id = nanoid();
   const at = nowIso();
   const by = userLabel(req);
 
   await pool.query(
-    `INSERT INTO incident_updates (id, incident_id, note, by_label, at)
-     VALUES ($1, $2, $3, $4, $5)`,
-    [id, incidentId, parsed.data.note, by, at]
+    `INSERT INTO incident_updates (id, incident_id, user_sub, note, by_label, at)
+     VALUES ($1, $2, $3, $4, $5, $6)`,
+    [id, incidentId, u.sub, parsed.data.note, by, at]
   );
 
   await audit(u.sub, "add_update", "incident", incidentId, { updateId: id });
   res.status(201).json({ id, note: parsed.data.note, by, at });
 }
+
 
 export async function patchIncidentStatus(req: Request, res: Response) {
   const u = req.user!;
