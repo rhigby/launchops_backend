@@ -189,10 +189,10 @@ export async function listIncidents(req: Request, res: Response) {
   const mapped = [] as any[];
   for (const i of incidents.rows) {
     const updates = await pool.query(
-      `SELECT id, note, by, at
-       FROM incident_updates
-       WHERE incident_id = $1
-       ORDER BY at DESC`,
+      `SELECT id, note, by_label as "by", at
+      FROM incident_updates
+      WHERE incident_id = $1
+      ORDER BY at DESC`,
       [i.id]
     );
 
