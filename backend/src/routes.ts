@@ -328,10 +328,21 @@ export async function sendMessage(req: Request, res: Response) {
 export async function pingPresence(req: Request, res: Response) {
   const u = req.user!;
   const parsed = pingPresenceSchema.safeParse(req.body || {});
-  if (!parsed.success) return res.status(400).json({ error: "validation", details: parsed.error.flatten() });
+  if (!parsed.success) {
+    return res.status(400).json({ error: "validation", details: parsed.error.flatten() });
+  }
 
-  const label = userLabel(req);
-  const handle = toHandle(label) || (u.sub || "user");
+  const claims = u as Record<string, unknown>;
+
+  const displayName =
+    (typeof claims["name"] === "string" && claims["name"]) ||
+    (typeof claims["nickname"] === "string" && claims["nickname"]) ||
+    (typeof claims["email"] === "string" && claims["email"]) ||
+    userLabel(req) ||
+    u.sub ||
+    "user";
+
+  const handle = toHandle(displayName) || u.sub || "user";
   const now = nowIso();
 
   await pool.query(
@@ -342,16 +353,17 @@ export async function pingPresence(req: Request, res: Response) {
        label = EXCLUDED.label,
        last_seen = EXCLUDED.last_seen,
        page = EXCLUDED.page`,
-    [u.sub, handle, label, now, parsed.data.page || null]
+    [u.sub, handle, displayName, now, parsed.data.page || null]
   );
 
   res.json({ ok: true });
 }
 
 export async function listOnline(req: Request, res: Response) {
-  // last 90 seconds considered "online"
   const rows = await pool.query(
     `SELECT user_sub as "userSub",
+            display_name,
+            page,
             handle,
             label,
             last_seen as "lastSeen"
