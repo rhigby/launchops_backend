@@ -242,7 +242,7 @@ export async function addIncidentUpdate(req: Request, res: Response) {
   const by = userLabel(req);
 
   await pool.query(
-    `INSERT INTO incident_updates (id, incident_id, note, by, at)
+    `INSERT INTO incident_updates (id, incident_id, note, by_label, at)
      VALUES ($1, $2, $3, $4, $5)`,
     [id, incidentId, parsed.data.note, by, at]
   );
