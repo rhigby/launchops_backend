@@ -1,5 +1,5 @@
 import express from "express";
-import cors from "cors";
+import cors, { type CorsOptions } from "cors";
 import helmet from "helmet";
 import morgan from "morgan";
 import swaggerUi from "swagger-ui-express";
@@ -16,48 +16,65 @@ async function main() {
 
   const app = express();
 
-app.use(helmet());
-app.use(express.json({ limit: "256kb" }));
-app.use(morgan("dev"));
+  // --- CORS (must be before routes) ---
+  const allowList = new Set(config.corsOrigins);
 
-app.use(
-  cors({
-    origin: (origin: string | undefined, cb: (err: Error | null, allow?: boolean) => void) => {
+  const corsOptions: CorsOptions = {
+    origin(origin, cb) {
+      // allow same-origin / curl / server-to-server
       if (!origin) return cb(null, true);
-      if (config.corsOrigins.includes(origin)) return cb(null, true);
-      return cb(new Error("CORS blocked"));
-    }
-  })
-);
 
+      // allow configured origins
+      if (allowList.has(origin)) return cb(null, true);
 
-app.get("/api/health", h.health);
+      // IMPORTANT: do not throw an error here (it can cause responses without CORS headers).
+      return cb(null, false);
+    },
+    credentials: true,
+    methods: ["GET", "POST", "PATCH", "DELETE", "OPTIONS"],
+    allowedHeaders: ["Content-Type", "Authorization"],
+    maxAge: 86400,
+  };
 
-// Swagger docs
-const openapiPath = path.join(process.cwd(), "src", "openapi.yaml");
-const openapi = YAML.parse(fs.readFileSync(openapiPath, "utf-8"));
-app.use("/api/docs", swaggerUi.serve, swaggerUi.setup(openapi));
+  app.use(cors(corsOptions));
+  // Explicitly handle preflight for all routes
+  app.options("*", cors(corsOptions));
 
-app.use("/api", rateLimit);
+  // --- middlewares ---
+  app.use(helmet());
+  app.use(express.json({ limit: "256kb" }));
+  app.use(morgan("dev"));
 
-// Auth-required routes
-app.get("/api/me", requireAuth, h.me);
+  // --- routes ---
+  app.get("/api/health", h.health);
 
-app.get("/api/checklists", requireAuth, h.listChecklists);
-app.post("/api/checklists", requireAuth, h.createChecklist);
-app.get("/api/checklists/:id", requireAuth, h.getChecklist);
-app.post("/api/checklists/:id/steps", requireAuth, h.addStep);
-app.post("/api/checklists/:id/steps/:stepId/toggle", requireAuth, h.toggleStep);
+  // Swagger docs
+  const openapiPath = path.join(process.cwd(), "src", "openapi.yaml");
+  const openapi = YAML.parse(fs.readFileSync(openapiPath, "utf-8"));
+  app.use("/api/docs", swaggerUi.serve, swaggerUi.setup(openapi));
 
-app.get("/api/incidents", requireAuth, h.listIncidents);
-app.post("/api/incidents", requireAuth, h.createIncident);
-app.post("/api/incidents/:id/updates", requireAuth, h.addIncidentUpdate);
-app.patch("/api/incidents/:id/status", requireAuth, h.patchIncidentStatus);
+  app.use("/api", rateLimit);
 
-app.get("/api/messages", requireAuth, h.listMessages);
-app.post("/api/messages", requireAuth, h.sendMessage);
-app.post("/api/presence/ping", requireAuth, h.pingPresence);
-app.get("/api/presence/online", requireAuth, h.listOnline);
+  // Auth-required routes
+  app.get("/api/me", requireAuth, h.me);
+
+  app.get("/api/checklists", requireAuth, h.listChecklists);
+  app.post("/api/checklists", requireAuth, h.createChecklist);
+  app.get("/api/checklists/:id", requireAuth, h.getChecklist);
+  app.post("/api/checklists/:id/steps", requireAuth, h.addStep);
+  app.post("/api/checklists/:id/steps/:stepId/toggle", requireAuth, h.toggleStep);
+
+  app.get("/api/incidents", requireAuth, h.listIncidents);
+  app.post("/api/incidents", requireAuth, h.createIncident);
+  app.post("/api/incidents/:id/updates", requireAuth, h.addIncidentUpdate);
+  app.patch("/api/incidents/:id/status", requireAuth, h.patchIncidentStatus);
+
+  app.get("/api/messages", requireAuth, h.listMessages);
+  app.post("/api/messages", requireAuth, h.sendMessage);
+
+  // Presence: keep auth required, but frontend will only ping after token exists
+  app.post("/api/presence/ping", requireAuth, h.pingPresence);
+  app.get("/api/presence/online", requireAuth, h.listOnline);
 
   app.listen(config.port, () => {
     console.log(`LaunchOps API listening on http://localhost:${config.port}`);
