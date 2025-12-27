@@ -7,10 +7,11 @@ import {
   createChecklistSchema,
   createIncidentSchema,
   patchIncidentStatusSchema,
+  sendMessageSchema,
+  pingPresenceSchema,
 } from "./validators.js";
 
-const userLabel = (req: Request) =>
-  req.user?.email || req.user?.name || req.user?.sub || "user";
+const userLabel = (req: Request) => req.user?.email || req.user?.name || req.user?.sub || "user";
 
 export function health(_req: Request, res: Response) {
   res.json({ ok: true, time: new Date().toISOString() });
@@ -36,7 +37,7 @@ export async function listChecklists(req: Request, res: Response) {
     [u.sub]
   );
 
-  const checklists: any[] = [];
+  const checklists = [] as any[];
   for (const r of rows.rows) {
     const steps = await pool.query(
       `SELECT id, label, done, updated_at, updated_by
@@ -66,11 +67,7 @@ export async function listChecklists(req: Request, res: Response) {
 export async function createChecklist(req: Request, res: Response) {
   const u = req.user!;
   const parsed = createChecklistSchema.safeParse(req.body);
-  if (!parsed.success) {
-    return res
-      .status(400)
-      .json({ error: "validation", details: parsed.error.flatten() });
-  }
+  if (!parsed.success) return res.status(400).json({ error: "validation", details: parsed.error.flatten() });
 
   const id = nanoid();
   const createdAt = nowIso();
@@ -124,18 +121,11 @@ export async function addStep(req: Request, res: Response) {
   const u = req.user!;
   const checklistId = req.params.id;
 
-  const exists = await pool.query(
-    `SELECT 1 FROM checklists WHERE user_sub = $1 AND id = $2`,
-    [u.sub, checklistId]
-  );
+  const exists = await pool.query(`SELECT 1 FROM checklists WHERE user_sub = $1 AND id = $2`, [u.sub, checklistId]);
   if (exists.rowCount === 0) return res.status(404).json({ error: "not_found" });
 
   const parsed = addStepSchema.safeParse(req.body);
-  if (!parsed.success) {
-    return res
-      .status(400)
-      .json({ error: "validation", details: parsed.error.flatten() });
-  }
+  if (!parsed.success) return res.status(400).json({ error: "validation", details: parsed.error.flatten() });
 
   const stepId = nanoid();
   const updatedAt = nowIso();
@@ -147,13 +137,8 @@ export async function addStep(req: Request, res: Response) {
     [stepId, checklistId, parsed.data.label, updatedAt, updatedBy]
   );
 
-  await audit(u.sub, "add_step", "checklist", checklistId, {
-    stepId,
-    label: parsed.data.label,
-  });
-  res
-    .status(201)
-    .json({ id: stepId, label: parsed.data.label, done: false, updatedAt, updatedBy });
+  await audit(u.sub, "add_step", "checklist", checklistId, { stepId, label: parsed.data.label });
+  res.status(201).json({ id: stepId, label: parsed.data.label, done: false, updatedAt, updatedBy });
 }
 
 export async function toggleStep(req: Request, res: Response) {
@@ -161,10 +146,7 @@ export async function toggleStep(req: Request, res: Response) {
   const checklistId = req.params.id;
   const stepId = req.params.stepId;
 
-  const exists = await pool.query(
-    `SELECT 1 FROM checklists WHERE user_sub = $1 AND id = $2`,
-    [u.sub, checklistId]
-  );
+  const exists = await pool.query(`SELECT 1 FROM checklists WHERE user_sub = $1 AND id = $2`, [u.sub, checklistId]);
   if (exists.rowCount === 0) return res.status(404).json({ error: "not_found" });
 
   const s = await pool.query(
@@ -188,43 +170,6 @@ export async function toggleStep(req: Request, res: Response) {
   res.json({ ok: true, stepId, done: nextDone, updatedAt, updatedBy });
 }
 
-export async function deleteChecklist(req: Request, res: Response) {
-  const u = req.user!;
-  const checklistId = req.params.id;
-
-  const exists = await pool.query(
-    `SELECT 1 FROM checklists WHERE user_sub = $1 AND id = $2`,
-    [u.sub, checklistId]
-  );
-  if (exists.rowCount === 0) return res.status(404).json({ error: "not_found" });
-
-  await pool.query(`DELETE FROM checklists WHERE user_sub = $1 AND id = $2`, [u.sub, checklistId]);
-
-  await audit(u.sub, "delete", "checklist", checklistId, {});
-  res.json({ ok: true });
-}
-
-export async function deleteChecklistStep(req: Request, res: Response) {
-  const u = req.user!;
-  const checklistId = req.params.id;
-  const stepId = req.params.stepId;
-
-  const exists = await pool.query(
-    `SELECT 1 FROM checklists WHERE user_sub = $1 AND id = $2`,
-    [u.sub, checklistId]
-  );
-  if (exists.rowCount === 0) return res.status(404).json({ error: "not_found" });
-
-  const del = await pool.query(
-    `DELETE FROM checklist_steps WHERE checklist_id = $1 AND id = $2`,
-    [checklistId, stepId]
-  );
-  if (del.rowCount === 0) return res.status(404).json({ error: "not_found" });
-
-  await audit(u.sub, "delete_step", "checklist", checklistId, { stepId });
-  res.json({ ok: true });
-}
-
 // -----------------------------------------------------------------------------
 // Incidents
 // -----------------------------------------------------------------------------
@@ -241,10 +186,10 @@ export async function listIncidents(req: Request, res: Response) {
     [u.sub]
   );
 
-  const mapped: any[] = [];
+  const mapped = [] as any[];
   for (const i of incidents.rows) {
     const updates = await pool.query(
-      `SELECT id, note, by_label as "by", at
+      `SELECT id, note, by, at
        FROM incident_updates
        WHERE incident_id = $1
        ORDER BY at DESC`,
@@ -267,11 +212,7 @@ export async function listIncidents(req: Request, res: Response) {
 export async function createIncident(req: Request, res: Response) {
   const u = req.user!;
   const parsed = createIncidentSchema.safeParse(req.body);
-  if (!parsed.success) {
-    return res
-      .status(400)
-      .json({ error: "validation", details: parsed.error.flatten() });
-  }
+  if (!parsed.success) return res.status(400).json({ error: "validation", details: parsed.error.flatten() });
 
   const id = nanoid();
   const createdAt = nowIso();
@@ -282,45 +223,28 @@ export async function createIncident(req: Request, res: Response) {
     [id, u.sub, parsed.data.title, parsed.data.severity, "open", createdAt]
   );
 
-  await audit(u.sub, "create", "incident", id, {
-    title: parsed.data.title,
-    severity: parsed.data.severity,
-  });
-  res.status(201).json({
-    id,
-    title: parsed.data.title,
-    severity: parsed.data.severity,
-    status: "open",
-    createdAt,
-    updates: [],
-  });
+  await audit(u.sub, "create", "incident", id, { title: parsed.data.title, severity: parsed.data.severity });
+  res.status(201).json({ id, title: parsed.data.title, severity: parsed.data.severity, status: "open", createdAt, updates: [] });
 }
 
 export async function addIncidentUpdate(req: Request, res: Response) {
   const u = req.user!;
   const incidentId = req.params.id;
 
-  const exists = await pool.query(
-    `SELECT 1 FROM incidents WHERE user_sub = $1 AND id = $2`,
-    [u.sub, incidentId]
-  );
+  const exists = await pool.query(`SELECT 1 FROM incidents WHERE user_sub = $1 AND id = $2`, [u.sub, incidentId]);
   if (exists.rowCount === 0) return res.status(404).json({ error: "not_found" });
 
   const parsed = addIncidentUpdateSchema.safeParse(req.body);
-  if (!parsed.success) {
-    return res
-      .status(400)
-      .json({ error: "validation", details: parsed.error.flatten() });
-  }
+  if (!parsed.success) return res.status(400).json({ error: "validation", details: parsed.error.flatten() });
 
   const id = nanoid();
   const at = nowIso();
   const by = userLabel(req);
 
   await pool.query(
-    `INSERT INTO incident_updates (id, incident_id, user_sub, note, by_label, at)
-     VALUES ($1, $2, $3, $4, $5, $6)`,
-    [id, incidentId, u.sub, parsed.data.note, by, at]
+    `INSERT INTO incident_updates (id, incident_id, note, by, at)
+     VALUES ($1, $2, $3, $4, $5)`,
+    [id, incidentId, parsed.data.note, by, at]
   );
 
   await audit(u.sub, "add_update", "incident", incidentId, { updateId: id });
@@ -331,125 +255,110 @@ export async function patchIncidentStatus(req: Request, res: Response) {
   const u = req.user!;
   const incidentId = req.params.id;
 
-  const exists = await pool.query(
-    `SELECT 1 FROM incidents WHERE user_sub = $1 AND id = $2`,
-    [u.sub, incidentId]
-  );
+  const exists = await pool.query(`SELECT 1 FROM incidents WHERE user_sub = $1 AND id = $2`, [u.sub, incidentId]);
   if (exists.rowCount === 0) return res.status(404).json({ error: "not_found" });
 
   const parsed = patchIncidentStatusSchema.safeParse(req.body);
-  if (!parsed.success) {
-    return res
-      .status(400)
-      .json({ error: "validation", details: parsed.error.flatten() });
-  }
+  if (!parsed.success) return res.status(400).json({ error: "validation", details: parsed.error.flatten() });
 
-  await pool.query(
-    `UPDATE incidents SET status = $1 WHERE id = $2 AND user_sub = $3`,
-    [parsed.data.status, incidentId, u.sub]
-  );
+  await pool.query(`UPDATE incidents SET status = $1 WHERE id = $2 AND user_sub = $3`, [parsed.data.status, incidentId, u.sub]);
   await audit(u.sub, "status", "incident", incidentId, { status: parsed.data.status });
 
   res.json({ ok: true, id: incidentId, status: parsed.data.status });
 }
 
-export async function deleteIncident(req: Request, res: Response) {
-  const u = req.user!;
-  const incidentId = req.params.id;
-
-  const exists = await pool.query(
-    `SELECT 1 FROM incidents WHERE user_sub = $1 AND id = $2`,
-    [u.sub, incidentId]
-  );
-  if (exists.rowCount === 0) return res.status(404).json({ error: "not_found" });
-
-  await pool.query(`DELETE FROM incidents WHERE user_sub = $1 AND id = $2`, [u.sub, incidentId]);
-
-  await audit(u.sub, "delete", "incident", incidentId, {});
-  res.json({ ok: true });
-}
 
 // -----------------------------------------------------------------------------
-// Messages (simple per-user DMs stored in Postgres)
+// Team / Presence
 // -----------------------------------------------------------------------------
+// A simple shared team feed (no explicit recipient).
+// Mentions: use @handle in message body; stored in a text[] column.
 
-export async function listMessageThreads(req: Request, res: Response) {
-  const u = req.user!;
-  const rows = await pool.query(
-    `WITH m AS (
-      SELECT
-        id,
-        sender_sub,
-        receiver_sub,
-        body,
-        created_at,
-        CASE WHEN sender_sub = $1 THEN receiver_sub ELSE sender_sub END AS other_sub
-      FROM messages
-      WHERE sender_sub = $1 OR receiver_sub = $1
-    )
-    SELECT DISTINCT ON (other_sub)
-      other_sub,
-      body,
-      created_at,
-      sender_sub
-    FROM m
-    ORDER BY other_sub, created_at DESC`,
-    [u.sub]
-  );
-
-  res.json(
-    rows.rows.map((r) => ({
-      otherSub: r.other_sub,
-      lastBody: r.body,
-      lastAt: r.created_at,
-      lastFrom: r.sender_sub,
-    }))
-  );
+function toHandle(label: string) {
+  const s = (label || "").trim().toLowerCase();
+  if (s.includes("@")) return s.split("@")[0].replace(/[^a-z0-9_\-\.]/g, "");
+  return s.replace(/\s+/g, "").replace(/[^a-z0-9_\-\.]/g, "");
 }
 
-export async function getConversation(req: Request, res: Response) {
-  const u = req.user!;
-  const other = req.params.other;
+function extractMentions(body: string): string[] {
+  const out: string[] = [];
+  const re = /@([a-zA-Z0-9_\-\.]+)/g;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(body))) out.push(m[1].toLowerCase());
+  return Array.from(new Set(out)).slice(0, 20);
+}
 
+export async function listMessages(_req: Request, res: Response) {
   const rows = await pool.query(
-    `SELECT id, sender_sub, receiver_sub, body, created_at
-     FROM messages
-     WHERE (sender_sub = $1 AND receiver_sub = $2)
-        OR (sender_sub = $2 AND receiver_sub = $1)
-     ORDER BY created_at ASC
-     LIMIT 200`,
-    [u.sub, other]
+    `SELECT id,
+            user_sub,
+            by_label as "by",
+            handle,
+            body,
+            created_at as "createdAt",
+            mentions
+     FROM team_messages
+     ORDER BY created_at DESC
+     LIMIT 200`
   );
-
-  res.json(
-    rows.rows.map((r) => ({
-      id: r.id,
-      from: r.sender_sub,
-      to: r.receiver_sub,
-      body: r.body,
-      at: r.created_at,
-    }))
-  );
+  res.json(rows.rows);
 }
 
 export async function sendMessage(req: Request, res: Response) {
   const u = req.user!;
-  const to = String((req.body?.to ?? req.body?.receiverSub ?? "")).trim();
-  const body = String((req.body?.body ?? req.body?.message ?? "")).trim();
-
-  if (!to) return res.status(400).json({ error: "validation", details: { to: ["Required"] } });
-  if (!body) return res.status(400).json({ error: "validation", details: { body: ["Required"] } });
-  if (to === u.sub) return res.status(400).json({ error: "validation", details: { to: ["Cannot message yourself"] } });
+  const parsed = sendMessageSchema.safeParse(req.body);
+  if (!parsed.success) return res.status(400).json({ error: "validation", details: parsed.error.flatten() });
 
   const id = nanoid();
   const createdAt = nowIso();
+  const by = userLabel(req);
+  const handle = toHandle(by) || (u.sub || "user");
+  const mentions = extractMentions(parsed.data.body);
 
   await pool.query(
-    `INSERT INTO messages (id, sender_sub, receiver_sub, body, created_at)
-     VALUES ($1, $2, $3, $4, $5)`,
-    [id, u.sub, to, body, createdAt]
+    `INSERT INTO team_messages (id, user_sub, by_label, handle, body, mentions, created_at, page)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`,
+    [id, u.sub, by, handle, parsed.data.body, mentions, createdAt, parsed.data.page || null]
   );
 
-  await audit(u.sub, "send", "message", id, { to });
-  res.status(201).json({ id, from: u.sub, to, body, at: createdAt });
+  await audit(u.sub, "message", "team", id, { mentions, page: parsed.data.page || null });
+  res.status(201).json({ id, userSub: u.sub, by, handle, body: parsed.data.body, mentions, createdAt });
+}
+
+export async function pingPresence(req: Request, res: Response) {
+  const u = req.user!;
+  const parsed = pingPresenceSchema.safeParse(req.body || {});
+  if (!parsed.success) return res.status(400).json({ error: "validation", details: parsed.error.flatten() });
+
+  const label = userLabel(req);
+  const handle = toHandle(label) || (u.sub || "user");
+  const now = nowIso();
+
+  await pool.query(
+    `INSERT INTO presence (user_sub, handle, label, last_seen, page)
+     VALUES ($1,$2,$3,$4,$5)
+     ON CONFLICT (user_sub) DO UPDATE SET
+       handle = EXCLUDED.handle,
+       label = EXCLUDED.label,
+       last_seen = EXCLUDED.last_seen,
+       page = EXCLUDED.page`,
+    [u.sub, handle, label, now, parsed.data.page || null]
+  );
+
+  res.json({ ok: true });
+}
+
+export async function listOnline(req: Request, res: Response) {
+  // last 90 seconds considered "online"
+  const rows = await pool.query(
+    `SELECT user_sub as "userSub",
+            handle,
+            label,
+            last_seen as "lastSeen"
+     FROM presence
+     WHERE last_seen > (NOW() - INTERVAL '90 seconds')
+     ORDER BY last_seen DESC
+     LIMIT 50`
+  );
+  res.json(rows.rows);
 }

@@ -20,3 +20,17 @@ export const addIncidentUpdateSchema = z.object({
 export const patchIncidentStatusSchema = z.object({
   status: z.enum(["open", "investigating", "mitigated", "resolved"])
 });
+
+
+// -----------------------------------------------------------------------------
+// Team / Presence
+// -----------------------------------------------------------------------------
+
+export const sendMessageSchema = z.object({
+  body: z.string().min(1).max(2000),
+  page: z.string().max(200).optional(),
+});
+
+export const pingPresenceSchema = z.object({
+  page: z.string().max(200).optional(),
+});

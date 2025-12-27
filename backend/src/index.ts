@@ -20,26 +20,18 @@ app.use(helmet());
 app.use(express.json({ limit: "256kb" }));
 app.use(morgan("dev"));
 
-app.use(cors({
-  origin: (origin, cb) => {
-    if (!origin) return cb(null, true);
-    if (config.corsOrigins.includes(origin)) return cb(null, true);
-    return cb(new Error("CORS blocked"));
-  },
-  methods: ["GET", "POST", "PATCH", "DELETE", "OPTIONS"],
-  allowedHeaders: ["Content-Type", "Authorization"],
-}));
+app.use(
+  cors({
+    origin: (origin: string | undefined, cb: (err: Error | null, allow?: boolean) => void) => {
+      if (!origin) return cb(null, true);
+      if (config.corsOrigins.includes(origin)) return cb(null, true);
+      return cb(new Error("CORS blocked"));
+    }
+  })
+);
 
-app.options("*", cors());
 
 app.get("/api/health", h.health);
-
-// Checklists
-app.delete("/api/checklists/:id", requireAuth, h.deleteChecklist);
-app.delete("/api/checklists/:id/steps/:stepId", requireAuth, h.deleteChecklistStep);
-
-// Incidents
-app.delete("/api/incidents/:id", requireAuth, h.deleteIncident);
 
 // Swagger docs
 const openapiPath = path.join(process.cwd(), "src", "openapi.yaml");
@@ -57,21 +49,15 @@ app.get("/api/checklists/:id", requireAuth, h.getChecklist);
 app.post("/api/checklists/:id/steps", requireAuth, h.addStep);
 app.post("/api/checklists/:id/steps/:stepId/toggle", requireAuth, h.toggleStep);
 
-app.delete("/api/checklists/:id", requireAuth, h.deleteChecklist);
-app.delete("/api/checklists/:id/steps/:stepId", requireAuth, h.deleteChecklistStep);
-
-
 app.get("/api/incidents", requireAuth, h.listIncidents);
 app.post("/api/incidents", requireAuth, h.createIncident);
 app.post("/api/incidents/:id/updates", requireAuth, h.addIncidentUpdate);
 app.patch("/api/incidents/:id/status", requireAuth, h.patchIncidentStatus);
 
-app.delete("/api/incidents/:id", requireAuth, h.deleteIncident);
-
-app.get("/api/messages/threads", requireAuth, h.listMessageThreads);
-app.get("/api/messages/with/:other", requireAuth, h.getConversation);
+app.get("/api/messages", requireAuth, h.listMessages);
 app.post("/api/messages", requireAuth, h.sendMessage);
-
+app.post("/api/presence/ping", requireAuth, h.pingPresence);
+app.get("/api/presence/online", requireAuth, h.listOnline);
 
   app.listen(config.port, () => {
     console.log(`LaunchOps API listening on http://localhost:${config.port}`);
