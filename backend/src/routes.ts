@@ -224,10 +224,15 @@ export async function listIncidents(req: Request, res: Response) {
     // IMPORTANT: don't filter updates by user_sub unless your schema truly requires it.
     // The incident is already scoped by incidents.user_sub.
     const updates = await pool.query(
-      `SELECT id, note, by_label as "by", at
-       FROM incident_updates
-       WHERE incident_id = $1
-       ORDER BY at DESC`,
+      `SELECT
+          iu.id,
+          iu.note,
+          u.display_name AS "by",
+          iu.at
+        FROM incident_updates iu
+        JOIN users u ON u.user_sub = iu.user_sub
+        WHERE iu.incident_id = $1
+        ORDER BY iu.at DESC`,
       [i.id]
     );
 
