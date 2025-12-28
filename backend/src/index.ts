@@ -61,6 +61,7 @@ async function main() {
   app.get("/api/messages", requireAuth, h.listMessages);
   app.post("/api/messages", requireAuth, h.sendMessage);
   app.get("/api/online", requireAuth, h.listOnline);
+  app.get("/api/presence/online", requireAuth, h.listOnline);
 
   app.listen(config.port, () => {
     console.log(`LaunchOps API listening on http://localhost:${config.port}`);
