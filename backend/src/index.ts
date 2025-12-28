@@ -66,6 +66,10 @@ async function main() {
   app.get("/api/online", requireAuth, h.listOnline);
   app.get("/api/presence/online", requireAuth, h.listOnline);
 
+  // Uploads (images/files)
+  app.post("/api/uploads", requireAuth, h.uploadSingle, h.uploadFile);
+  app.get("/api/uploads/:id", requireAuth, h.getUpload);
+
   app.listen(config.port, () => {
     console.log(`LaunchOps API listening on http://localhost:${config.port}`);
     console.log(`Docs: http://localhost:${config.port}/api/docs`);

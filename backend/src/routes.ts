@@ -1,5 +1,6 @@
 // src/routes.ts
 import type { Request, Response } from "express";
+import multer from "multer";
 import { nanoid } from "nanoid";
 import { audit, nowIso, pool, seedIfEmpty } from "./db.js";
 import {
@@ -12,6 +13,21 @@ import {
 } from "./validators.js";
 
 const userLabel = (req: Request) => req.user?.email || req.user?.name || req.user?.sub || "user";
+
+// -----------------------------------------------------------------------------
+// Uploads (image/file support)
+// -----------------------------------------------------------------------------
+// NOTE: This uses `multer` memoryStorage. Install deps:
+//   npm i multer
+//   npm i -D @types/multer
+// If you don't want multer, we can swap to a raw-body endpoint.
+const upload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 5 * 1024 * 1024 }, // 5MB
+});
+
+// used in index.ts: app.post("/api/uploads", requireAuth, h.uploadSingle, h.uploadFile)
+export const uploadSingle = upload.single("file");
 
 /**
  * Converts a human label into a stable @handle-friendly string
@@ -485,4 +501,50 @@ export async function listOnline(_req: Request, res: Response) {
      LIMIT 50`
   );
   res.json(rows.rows);
+}
+
+// -----------------------------------------------------------------------------
+// Upload endpoints
+// -----------------------------------------------------------------------------
+
+export async function uploadFile(req: Request, res: Response) {
+  // `requireAuth` guarantees a user, but TS typing keeps it optional.
+  const u = req.user;
+  if (!u) return res.status(401).json({ error: "unauthorized" });
+
+  const file = (req as any).file as { buffer: Buffer; mimetype: string; size?: number } | undefined;
+  if (!file) return res.status(400).json({ error: "no_file" });
+
+  const id = nanoid();
+
+  // `uploads` table is expected to exist (you said you created it in advance).
+  // Recommended columns:
+  //   id TEXT PK, user_sub TEXT, content_type TEXT, bytes BYTEA, created_at TIMESTAMPTZ
+  await pool.query(
+    `INSERT INTO uploads (id, user_sub, content_type, bytes, created_at)
+     VALUES ($1, $2, $3, $4, NOW())`,
+    [id, u.sub, file.mimetype, file.buffer]
+  );
+
+  res.json({ id, url: `/api/uploads/${id}` });
+}
+
+export async function getUpload(req: Request, res: Response) {
+  const u = req.user;
+  if (!u) return res.status(401).json({ error: "unauthorized" });
+
+  const id = req.params.id;
+  const row = await pool.query(
+    `SELECT content_type, bytes
+     FROM uploads
+     WHERE id = $1 AND user_sub = $2`,
+    [id, u.sub]
+  );
+  if (row.rowCount === 0) return res.status(404).json({ error: "not_found" });
+
+  const r = row.rows[0] as { content_type: string; bytes: Buffer };
+  res.setHeader("Content-Type", r.content_type || "application/octet-stream");
+  // cache-bust friendly but safe
+  res.setHeader("Cache-Control", "private, max-age=31536000, immutable");
+  return res.status(200).send(r.bytes);
 }
