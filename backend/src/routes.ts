@@ -10,41 +10,29 @@ import {
   sendMessageSchema,
   pingPresenceSchema,
 } from "./validators.js";
+import type { AuthUser } from "./types.js";
 
-function toHandle(label: string) {
-  const h = (label || "")
-    .trim()
-    .toLowerCase()
-    .replace(/[^a-z0-9_.-]+/g, "-")
-    .replace(/^-+|-+$/g, "");
-  return h.slice(0, 32);
+// Helpers ---------------------------------------------------------------------
+
+async function getProfile(sub: string) {
+  const r = await pool.query(
+    `SELECT user_sub, email, display_name, picture_url, handle
+     FROM users
+     WHERE user_sub = $1`,
+    [sub]
+  );
+  return r.rows[0] as
+    | { user_sub: string; email: string | null; display_name: string; picture_url: string | null; handle: string | null }
+    | undefined;
 }
 
-function displayNameFromUser(u: any): string {
-  const name =
-    (typeof u?.name === "string" && u.name.trim()) ||
-    (typeof u?.nickname === "string" && u.nickname.trim()) ||
-    (typeof u?.preferred_username === "string" && u.preferred_username.trim()) ||
-    (typeof u?.email === "string" && u.email.trim()) ||
-    (typeof u?.sub === "string" && u.sub.trim());
-
-  return name || "user";
+function fallbackLabel(u: AuthUser) {
+  return u.email || u.name || u.sub || "user";
 }
 
-// Prefer users.display_name, fallback to token-derived
-async function userLabel(req: Request): Promise<string> {
-  const sub = req.user?.sub;
-  if (!sub) return "user";
-
-  try {
-    const r = await pool.query(`SELECT display_name FROM users WHERE user_sub = $1`, [sub]);
-    if (r.rowCount) return r.rows[0].display_name as string;
-  } catch {
-    // ignore; fallback below
-  }
-
-  return displayNameFromUser(req.user);
-}
+// -----------------------------------------------------------------------------
+// Health / Me
+// -----------------------------------------------------------------------------
 
 export function health(_req: Request, res: Response) {
   res.json({ ok: true, time: new Date().toISOString() });
@@ -60,7 +48,9 @@ export function me(req: Request, res: Response) {
 
 export async function listChecklists(req: Request, res: Response) {
   const u = req.user!;
-  await seedIfEmpty(u.sub, await userLabel(req));
+  // If seed data depends on user label, try users table first.
+  const profile = await getProfile(u.sub);
+  await seedIfEmpty(u.sub, profile?.display_name || fallbackLabel(u));
 
   const rows = await pool.query(
     `SELECT id, title, created_at
@@ -162,7 +152,9 @@ export async function addStep(req: Request, res: Response) {
 
   const stepId = nanoid();
   const updatedAt = nowIso();
-  const updatedBy = await userLabel(req);
+
+  const profile = await getProfile(u.sub);
+  const updatedBy = profile?.display_name || fallbackLabel(u);
 
   await pool.query(
     `INSERT INTO checklist_steps (id, checklist_id, label, done, updated_at, updated_by)
@@ -190,7 +182,9 @@ export async function toggleStep(req: Request, res: Response) {
 
   const nextDone = !s.rows[0].done;
   const updatedAt = nowIso();
-  const updatedBy = await userLabel(req);
+
+  const profile = await getProfile(u.sub);
+  const updatedBy = profile?.display_name || fallbackLabel(u);
 
   await pool.query(
     `UPDATE checklist_steps
@@ -209,7 +203,8 @@ export async function toggleStep(req: Request, res: Response) {
 
 export async function listIncidents(req: Request, res: Response) {
   const u = req.user!;
-  await seedIfEmpty(u.sub, await userLabel(req));
+  const profile = await getProfile(u.sub);
+  await seedIfEmpty(u.sub, profile?.display_name || fallbackLabel(u));
 
   const incidents = await pool.query(
     `SELECT id, title, severity, status, created_at
@@ -221,19 +216,17 @@ export async function listIncidents(req: Request, res: Response) {
 
   const mapped: any[] = [];
   for (const i of incidents.rows) {
-    // IMPORTANT: don't filter updates by user_sub unless your schema truly requires it.
-    // The incident is already scoped by incidents.user_sub.
     const updates = await pool.query(
       `SELECT
           iu.id,
           iu.note,
-          u.display_name AS "by",
+          COALESCE(uu.display_name, iu.by_label, iu.user_sub) as "by",
           iu.at
-        FROM incident_updates iu
-        JOIN users u ON u.user_sub = iu.user_sub
-        WHERE iu.incident_id = $1
-        ORDER BY iu.at DESC`,
-      [i.id]
+       FROM incident_updates iu
+       LEFT JOIN users uu ON uu.user_sub = iu.user_sub
+       WHERE iu.incident_id = $1 AND iu.user_sub = $2
+       ORDER BY iu.at DESC`,
+      [i.id, u.sub]
     );
 
     mapped.push({
@@ -242,7 +235,7 @@ export async function listIncidents(req: Request, res: Response) {
       severity: i.severity,
       status: i.status,
       createdAt: i.created_at,
-      updates: updates.rows.map((u2) => ({ id: u2.id, note: u2.note, by: u2.by, at: u2.at })),
+      updates: updates.rows.map((r) => ({ id: r.id, note: r.note, by: r.by, at: r.at })),
     });
   }
 
@@ -264,7 +257,14 @@ export async function createIncident(req: Request, res: Response) {
   );
 
   await audit(u.sub, "create", "incident", id, { title: parsed.data.title, severity: parsed.data.severity });
-  res.status(201).json({ id, title: parsed.data.title, severity: parsed.data.severity, status: "open", createdAt, updates: [] });
+  res.status(201).json({
+    id,
+    title: parsed.data.title,
+    severity: parsed.data.severity,
+    status: "open",
+    createdAt,
+    updates: [],
+  });
 }
 
 export async function addIncidentUpdate(req: Request, res: Response) {
@@ -279,17 +279,18 @@ export async function addIncidentUpdate(req: Request, res: Response) {
 
   const id = nanoid();
   const at = nowIso();
-  const by = await userLabel(req);
 
-  // user_sub here should be the author of the update (so joins work later)
+  const profile = await getProfile(u.sub);
+  const byLabel = profile?.display_name || fallbackLabel(u);
+
   await pool.query(
-    `INSERT INTO incident_updates (id, incident_id, user_sub, note, by_label, at)
-     VALUES ($1, $2, $3, $4, $5, $6)`,
-    [id, incidentId, u.sub, parsed.data.note, by, at]
+    `INSERT INTO incident_updates (id, incident_id, user_sub, note, by_label, by_sub, at)
+     VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+    [id, incidentId, u.sub, parsed.data.note, byLabel, u.sub, at]
   );
 
   await audit(u.sub, "add_update", "incident", incidentId, { updateId: id });
-  res.status(201).json({ id, note: parsed.data.note, by, at });
+  res.status(201).json({ id, note: parsed.data.note, by: byLabel, at });
 }
 
 export async function patchIncidentStatus(req: Request, res: Response) {
@@ -307,39 +308,39 @@ export async function patchIncidentStatus(req: Request, res: Response) {
     incidentId,
     u.sub,
   ]);
-
   await audit(u.sub, "status", "incident", incidentId, { status: parsed.data.status });
+
   res.json({ ok: true, id: incidentId, status: parsed.data.status });
 }
 
 // -----------------------------------------------------------------------------
-// Team / Presence
+// Team Messages + Presence
 // -----------------------------------------------------------------------------
 
 function extractMentions(body: string): string[] {
   const out: string[] = [];
-  const re = /@([a-zA-Z0-9_.-]+)/g;
+  const re = /@([a-zA-Z0-9_\-\.]+)/g;
   let m: RegExpExecArray | null;
   while ((m = re.exec(body))) out.push(m[1].toLowerCase());
   return Array.from(new Set(out)).slice(0, 20);
 }
 
-export async function listMessages(_req: Request, res: Response) {
-  // Return display names from users table (no more auth0 sub strings)
+export async function listMessages(req: Request, res: Response) {
+  // show friendly names even if by_label is stale
   const rows = await pool.query(
-    `SELECT tm.id,
-            tm.user_sub as "userSub",
-            u.display_name as "by",
-            tm.handle,
-            tm.body,
-            tm.created_at as "createdAt",
-            tm.mentions
+    `SELECT
+        tm.id,
+        tm.user_sub as "userSub",
+        COALESCE(u.display_name, tm.by_label, tm.user_sub) as "by",
+        COALESCE(u.handle, tm.handle) as "handle",
+        tm.body,
+        tm.created_at as "createdAt",
+        tm.mentions
      FROM team_messages tm
-     JOIN users u ON u.user_sub = tm.user_sub
+     LEFT JOIN users u ON u.user_sub = tm.user_sub
      ORDER BY tm.created_at DESC
      LIMIT 200`
   );
-
   res.json(rows.rows);
 }
 
@@ -350,8 +351,10 @@ export async function sendMessage(req: Request, res: Response) {
 
   const id = nanoid();
   const createdAt = nowIso();
-  const by = await userLabel(req);
-  const handle = toHandle(by) || u.sub || "user";
+
+  const profile = await getProfile(u.sub);
+  const by = profile?.display_name || fallbackLabel(u);
+  const handle = profile?.handle || null;
   const mentions = extractMentions(parsed.data.body);
 
   await pool.query(
@@ -364,21 +367,29 @@ export async function sendMessage(req: Request, res: Response) {
   res.status(201).json({ id, userSub: u.sub, by, handle, body: parsed.data.body, mentions, createdAt });
 }
 
+/**
+ * Presence ping: do NOT derive a display name from the token here.
+ * We take the display name from `users` table to avoid reverting to `sub`
+ * when tokens are missing profile/email claims.
+ */
 export async function pingPresence(req: Request, res: Response) {
   const u = req.user!;
   const parsed = pingPresenceSchema.safeParse(req.body || {});
   if (!parsed.success) return res.status(400).json({ error: "validation", details: parsed.error.flatten() });
 
-  const label = await userLabel(req);
-  const handle = toHandle(label) || u.sub || "user";
   const now = nowIso();
+
+  // Pull the latest known user profile.
+  const profile = await getProfile(u.sub);
+  const label = profile?.display_name || fallbackLabel(u);
+  const handle = profile?.handle || null;
 
   await pool.query(
     `INSERT INTO presence (user_sub, handle, label, last_seen, page)
-     VALUES ($1,$2,$3,$4,$5)
+     VALUES ($1, $2, $3, $4, $5)
      ON CONFLICT (user_sub) DO UPDATE SET
-       handle = EXCLUDED.handle,
-       label = EXCLUDED.label,
+       handle = COALESCE(EXCLUDED.handle, presence.handle),
+       label  = COALESCE(EXCLUDED.label, presence.label),
        last_seen = EXCLUDED.last_seen,
        page = EXCLUDED.page`,
     [u.sub, handle, label, now, parsed.data.page || null]
@@ -388,22 +399,18 @@ export async function pingPresence(req: Request, res: Response) {
 }
 
 export async function listOnline(_req: Request, res: Response) {
-  // presence has label/handle, but we want real display names from users
   const rows = await pool.query(
     `SELECT
         p.user_sub as "userSub",
-        u.display_name as "displayName",
-        u.email as "email",
-        u.picture_url as "pictureUrl",
-        p.page as "page",
-        p.handle as "handle",
+        COALESCE(u.display_name, p.label, p.user_sub) as "displayName",
+        COALESCE(u.handle, p.handle) as "handle",
+        p.page,
         p.last_seen as "lastSeen"
      FROM presence p
-     JOIN users u ON u.user_sub = p.user_sub
+     LEFT JOIN users u ON u.user_sub = p.user_sub
      WHERE p.last_seen > (NOW() - INTERVAL '90 seconds')
      ORDER BY p.last_seen DESC
      LIMIT 50`
   );
-
   res.json(rows.rows);
 }
