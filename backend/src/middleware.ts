@@ -94,25 +94,25 @@ export async function requireAuth(
     const handle = toHandle(displayName);
 
     await pool.query(
-      `
-      INSERT INTO users (user_sub, email, display_name, picture_url, handle, last_seen, updated_at)
-      VALUES ($1, $2, $3, $4, $5, now(), now())
-      ON CONFLICT (user_sub) DO UPDATE SET
-        email = EXCLUDED.email,
-        display_name = EXCLUDED.display_name,
-        picture_url = EXCLUDED.picture_url,
-        handle = EXCLUDED.handle,
-        last_seen = now(),
-        updated_at = now()
-      `,
-      [
-        user.sub,
-        user.email ?? null,
-        displayName,
-        user.picture ?? null,
-        handle,
-      ]
-    );
+  `
+  INSERT INTO users (user_sub, email, display_name, picture_url, handle, last_seen, updated_at)
+  VALUES ($1, $2, $3, $4, $5, now(), now())
+  ON CONFLICT (user_sub) DO UPDATE SET
+    email = EXCLUDED.email,
+    display_name = EXCLUDED.display_name,
+    picture_url = EXCLUDED.picture_url,
+    handle = EXCLUDED.handle,
+    last_seen = now(),
+    updated_at = now()
+  `,
+  [
+    req.user.sub,
+    req.user.email ?? null,
+    displayNameFromUser(req.user),
+    req.user.picture ?? null,
+    toHandle(displayNameFromUser(req.user)),
+  ]
+);
 
     next();
   } catch (err) {

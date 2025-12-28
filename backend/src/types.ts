@@ -1,16 +1,17 @@
 export type AuthUser = {
   sub: string;
-  aud?: string | string[];
-  iss?: string;
-  iat?: number;
-  exp?: number;
-  scope?: string;
 
-  email?: string | null;
-  name?: string | null;
-  nickname?: string | null;
-  preferred_username?: string | null;
+  // common OIDC/Auth0 fields (optional depending on token + scopes)
+  email?: string;
+  name?: string;
+  nickname?: string;
+  preferred_username?: string;
+  picture?: string;
 
-  picture?: string | null;
+  // Auth0 sometimes provides these
+  given_name?: string;
+  family_name?: string;
+
+  // Catch-all for custom claims
   [key: string]: unknown;
 };
