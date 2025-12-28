@@ -2,16 +2,8 @@ import type { NextFunction, Request, Response } from "express";
 import { RateLimiterMemory } from "rate-limiter-flexible";
 import { config } from "./config.js";
 import { auth0JwtVerifier } from "./auth.js";
-import type { AuthUser } from "./auth.js";
+import type { AuthUser } from "./types";
 import { pool } from "./db.js";
-
-declare global {
-  namespace Express {
-    interface Request {
-      user?: AuthUser;
-    }
-  }
-}
 
 const limiter = new RateLimiterMemory({
   points: config.rateLimitPoints,
@@ -40,21 +32,20 @@ export async function requireAuth(req: Request, res: Response, next: NextFunctio
   if (!token) return res.status(401).json({ error: "missing_token" });
 
   try {
-    req.user = await verify(token);
+    // Treat verifier result as AuthUser (your canonical type)
+    req.user = (await verify(token)) as AuthUser;
 
     // Normalize user profile into users table on every authed request
     await upsertUserFromAuth(req.user);
 
     next();
-  } catch (_err) {
+  } catch {
     res.status(401).json({ error: "invalid_token" });
   }
 }
 
 async function upsertUserFromAuth(u: AuthUser) {
-  const anyU = u as any;
-
-  const displayName = displayNameFromUser(anyU);
+  const displayName = displayNameFromUser(u);
   const handle = toHandle(displayName);
 
   await pool.query(
@@ -68,10 +59,10 @@ async function upsertUserFromAuth(u: AuthUser) {
        last_seen = now(),
        updated_at = now()`,
     [
-      anyU.sub,
-      anyU.email || null,
+      u.sub,
+      u.email || null,
       displayName,
-      anyU.picture || null,
+      u.picture || null,
       handle || null,
     ]
   );
@@ -86,13 +77,13 @@ function toHandle(label: string) {
   return h.slice(0, 32);
 }
 
-function displayNameFromUser(u: any): string {
-  const name =
-    (typeof u?.name === "string" && u.name.trim()) ||
-    (typeof u?.nickname === "string" && u.nickname.trim()) ||
-    (typeof u?.preferred_username === "string" && u.preferred_username.trim()) ||
-    (typeof u?.email === "string" && u.email.trim()) ||
-    (typeof u?.sub === "string" && u.sub.trim());
-
-  return name || "user";
+function displayNameFromUser(u: AuthUser): string {
+  return (
+    (typeof u.name === "string" && u.name.trim()) ||
+    (typeof u.nickname === "string" && u.nickname.trim()) ||
+    (typeof u.preferred_username === "string" && u.preferred_username.trim()) ||
+    (typeof u.email === "string" && u.email.trim()) ||
+    (typeof u.sub === "string" && u.sub.trim()) ||
+    "user"
+  );
 }
