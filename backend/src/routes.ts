@@ -1,3 +1,4 @@
+// src/routes.ts
 import type { Request, Response } from "express";
 import { nanoid } from "nanoid";
 import { audit, nowIso, pool, seedIfEmpty } from "./db.js";
@@ -12,26 +13,81 @@ import {
 
 const userLabel = (req: Request) => req.user?.email || req.user?.name || req.user?.sub || "user";
 
-function toHandle(label: string) {
+/**
+ * Converts a human label into a stable @handle-friendly string
+ */
+function toHandle(label: string): string {
   const s = (label || "").trim().toLowerCase();
-  if (s.includes("@")) return s.split("@")[0].replace(/[^a-z0-9_\-\.]/g, "");
-  return s.replace(/\s+/g, "").replace(/[^a-z0-9_\-\.]/g, "");
+  if (s.includes("@")) return s.split("@")[0].replace(/[^a-z0-9_.-]/g, "");
+  return s.replace(/\s+/g, "").replace(/[^a-z0-9_.-]/g, "").slice(0, 32);
 }
 
+/**
+ * Extract @mentions from a message body
+ */
 function extractMentions(body: string): string[] {
   const out: string[] = [];
-  const re = /@([a-zA-Z0-9_\-\.]+)/g;
+  const re = /@([a-zA-Z0-9_.-]+)/g;
   let m: RegExpExecArray | null;
   while ((m = re.exec(body))) out.push(m[1].toLowerCase());
   return Array.from(new Set(out)).slice(0, 20);
+}
+
+/**
+ * Build a nice display name from Auth0/OIDC claims
+ * (This fixes “Cannot find name displayNameFromUser” by defining it here.)
+ */
+function displayNameFromUser(u: any): string {
+  return (
+    (typeof u?.name === "string" && u.name) ||
+    (typeof u?.nickname === "string" && u.nickname) ||
+    (typeof u?.preferred_username === "string" && u.preferred_username) ||
+    (typeof u?.email === "string" && u.email) ||
+    (typeof u?.given_name === "string" && u.given_name) ||
+    (typeof u?.family_name === "string" && u.family_name) ||
+    (typeof u?.sub === "string" && u.sub) ||
+    "user"
+  );
 }
 
 export function health(_req: Request, res: Response) {
   res.json({ ok: true, time: new Date().toISOString() });
 }
 
-export function me(req: Request, res: Response) {
-  res.json({ user: req.user });
+/**
+ * me()
+ * IMPORTANT: This is where we upsert into `users` and update last_seen.
+ * We DO NOT use /presence/ping anymore.
+ */
+export async function me(req: Request, res: Response) {
+  const u = req.user!;
+  const displayName = displayNameFromUser(u);
+  const handle = toHandle(displayName) || toHandle(u.sub || "user");
+
+  // Upsert user profile + last_seen
+  await pool.query(
+    `
+    INSERT INTO users (user_sub, email, display_name, picture_url, handle, last_seen, updated_at)
+    VALUES ($1, $2, $3, $4, $5, now(), now())
+    ON CONFLICT (user_sub) DO UPDATE SET
+      email = COALESCE(EXCLUDED.email, users.email),
+      picture_url = COALESCE(EXCLUDED.picture_url, users.picture_url),
+      handle = COALESCE(EXCLUDED.handle, users.handle),
+      last_seen = now(),
+      updated_at = now(),
+      -- only overwrite display_name if it is blank OR still the default sub
+      display_name = CASE
+        WHEN users.display_name IS NULL
+          OR users.display_name = ''
+          OR users.display_name = users.user_sub
+        THEN EXCLUDED.display_name
+        ELSE users.display_name
+      END
+    `,
+    [u.sub, u.email ?? null, displayName, u.picture ?? null, handle]
+  );
+
+  res.json({ user: u });
 }
 
 // -----------------------------------------------------------------------------
@@ -162,10 +218,10 @@ export async function toggleStep(req: Request, res: Response) {
   const exists = await pool.query(`SELECT 1 FROM checklists WHERE user_sub = $1 AND id = $2`, [u.sub, checklistId]);
   if (exists.rowCount === 0) return res.status(404).json({ error: "not_found" });
 
-  const s = await pool.query(
-    `SELECT id, done FROM checklist_steps WHERE checklist_id = $1 AND id = $2`,
-    [checklistId, stepId]
-  );
+  const s = await pool.query(`SELECT id, done FROM checklist_steps WHERE checklist_id = $1 AND id = $2`, [
+    checklistId,
+    stepId,
+  ]);
   if (s.rowCount === 0) return res.status(404).json({ error: "not_found" });
 
   const nextDone = !s.rows[0].done;
@@ -257,8 +313,6 @@ export async function addIncidentUpdate(req: Request, res: Response) {
 
   const id = nanoid();
   const at = nowIso();
-
-  // by_label kept for history; UI prefers users.display_name
   const byLabel = userLabel(req);
 
   await pool.query(
@@ -281,7 +335,11 @@ export async function patchIncidentStatus(req: Request, res: Response) {
   const parsed = patchIncidentStatusSchema.safeParse(req.body);
   if (!parsed.success) return res.status(400).json({ error: "validation", details: parsed.error.flatten() });
 
-  await pool.query(`UPDATE incidents SET status = $1 WHERE id = $2 AND user_sub = $3`, [parsed.data.status, incidentId, u.sub]);
+  await pool.query(`UPDATE incidents SET status = $1 WHERE id = $2 AND user_sub = $3`, [
+    parsed.data.status,
+    incidentId,
+    u.sub,
+  ]);
   await audit(u.sub, "status", "incident", incidentId, { status: parsed.data.status });
 
   res.json({ ok: true, id: incidentId, status: parsed.data.status });
@@ -318,9 +376,8 @@ export async function sendMessage(req: Request, res: Response) {
   const id = nanoid();
   const createdAt = nowIso();
 
-  // We'll keep by_label for history, but UI uses join(users)
   const by = userLabel(req);
-  const handle = toHandle(by) || toHandle(u.sub);
+  const handle = toHandle(by) || toHandle(u.sub || "user");
   const mentions = extractMentions(parsed.data.body);
 
   await pool.query(
@@ -338,6 +395,7 @@ export async function listOnline(_req: Request, res: Response) {
     `SELECT
         user_sub as "userSub",
         display_name as "displayName",
+        email,
         handle,
         last_seen as "lastSeen"
      FROM users
