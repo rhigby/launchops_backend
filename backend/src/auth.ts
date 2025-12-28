@@ -4,7 +4,14 @@ export type AuthUser = {
   sub: string;
   email?: string;
   name?: string;
-  roles?: string[];
+  nickname?: string;
+  preferred_username?: string;
+  picture?: string;
+  given_name?: string;
+  family_name?: string;
+
+  // Any custom claims
+  [key: string]: unknown;
 };
 
 export function auth0JwtVerifier(opts: { issuer: string; audience: string }) {
