@@ -1,0 +1,79 @@
+openapi: 3.0.3
+info: { title: LaunchOps API, version: 1.0.0 }
+servers: [{ url: /api }]
+components:
+  securitySchemes:
+    bearerAuth: { type: http, scheme: bearer, bearerFormat: JWT }
+security: [{ bearerAuth: [] }]
+paths:
+  /health:
+    get: { security: [], summary: Health, responses: { "200": { description: OK } } }
+  /me:
+    get: { summary: Current user, responses: { "200": { description: OK } } }
+  /checklists:
+    get: { summary: List checklists, responses: { "200": { description: OK } } }
+    post:
+      summary: Create checklist
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { type: object, required: [title], properties: { title: { type: string } } }
+      responses: { "201": { description: Created } }
+  /checklists/{id}:
+    get:
+      summary: Get checklist
+      parameters: [{ name: id, in: path, required: true, schema: { type: string } }]
+      responses: { "200": { description: OK } }
+  /checklists/{id}/steps:
+    post:
+      summary: Add step
+      parameters: [{ name: id, in: path, required: true, schema: { type: string } }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { type: object, required: [label], properties: { label: { type: string } } }
+      responses: { "201": { description: Created } }
+  /checklists/{id}/steps/{stepId}/toggle:
+    post:
+      summary: Toggle step
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string } }
+        - { name: stepId, in: path, required: true, schema: { type: string } }
+      responses: { "200": { description: OK } }
+  /incidents:
+    get: { summary: List incidents, responses: { "200": { description: OK } } }
+    post:
+      summary: Create incident
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [title, severity]
+              properties:
+                title: { type: string }
+                severity: { type: integer, minimum: 1, maximum: 5 }
+      responses: { "201": { description: Created } }
+  /incidents/{id}/updates:
+    post:
+      summary: Add update
+      parameters: [{ name: id, in: path, required: true, schema: { type: string } }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { type: object, required: [note], properties: { note: { type: string } } }
+      responses: { "201": { description: Created } }
+  /incidents/{id}/status:
+    patch:
+      summary: Patch status
+      parameters: [{ name: id, in: path, required: true, schema: { type: string } }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { type: object, required: [status], properties: { status: { type: string } } }
+      responses: { "200": { description: OK } }
