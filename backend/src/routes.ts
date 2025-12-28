@@ -349,23 +349,50 @@ export async function patchIncidentStatus(req: Request, res: Response) {
 // Team feed + Online users (derived from users.last_seen, no ping endpoint needed)
 // -----------------------------------------------------------------------------
 
-export async function listMessages(_req: Request, res: Response) {
-  const rows = await pool.query(
-    `SELECT
-        tm.id,
-        tm.user_sub as "userSub",
-        COALESCE(u.display_name, tm.by_label) as "by",
-        tm.handle,
-        tm.body,
-        tm.created_at as "createdAt",
-        tm.mentions,
-        tm.page
-     FROM team_messages tm
-     LEFT JOIN users u ON u.user_sub = tm.user_sub
-     ORDER BY tm.created_at DESC
-     LIMIT 200`
-  );
-  res.json(rows.rows);
+export async function listMessages(req: Request, res: Response) {
+  const limitRaw = Number(req.query.limit ?? 30);
+  const limit = Number.isFinite(limitRaw) ? Math.min(Math.max(limitRaw, 1), 100) : 30;
+
+  const before = typeof req.query.before === "string" ? req.query.before : null;
+  const beforeId = typeof req.query.beforeId === "string" ? req.query.beforeId : null;
+
+  const params: any[] = [];
+  let where = "";
+
+  if (before && beforeId) {
+    params.push(before, beforeId);
+    where = `WHERE (tm.created_at, tm.id) < ($1::timestamptz, $2::text)`;
+  }
+
+  // fetch one extra row so we can report hasMore
+  params.push(limit + 1);
+
+  const sql = `
+    SELECT
+      tm.id,
+      tm.user_sub as "userSub",
+      COALESCE(u.display_name, tm.by_label) as "by",
+      tm.handle,
+      tm.body,
+      tm.created_at as "createdAt",
+      tm.mentions,
+      tm.page
+    FROM team_messages tm
+    LEFT JOIN users u ON u.user_sub = tm.user_sub
+    ${where}
+    ORDER BY tm.created_at DESC, tm.id DESC
+    LIMIT $${params.length}
+  `;
+
+  const rows = await pool.query(sql, params);
+
+  const items = rows.rows.slice(0, limit);
+  const hasMore = rows.rows.length > limit;
+
+  const last = items[items.length - 1];
+  const next = last ? { before: last.createdAt, beforeId: last.id } : null;
+
+  res.json({ items, hasMore, next });
 }
 
 export async function sendMessage(req: Request, res: Response) {
