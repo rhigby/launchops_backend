@@ -11,7 +11,40 @@ import {
   pingPresenceSchema,
 } from "./validators.js";
 
-const userLabel = (req: Request) => req.user?.email || req.user?.name || req.user?.sub || "user";
+function toHandle(label: string) {
+  const h = (label || "")
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9_.-]+/g, "-")
+    .replace(/^-+|-+$/g, "");
+  return h.slice(0, 32);
+}
+
+function displayNameFromUser(u: any): string {
+  const name =
+    (typeof u?.name === "string" && u.name.trim()) ||
+    (typeof u?.nickname === "string" && u.nickname.trim()) ||
+    (typeof u?.preferred_username === "string" && u.preferred_username.trim()) ||
+    (typeof u?.email === "string" && u.email.trim()) ||
+    (typeof u?.sub === "string" && u.sub.trim());
+
+  return name || "user";
+}
+
+// Prefer users.display_name, fallback to token-derived
+async function userLabel(req: Request): Promise<string> {
+  const sub = req.user?.sub;
+  if (!sub) return "user";
+
+  try {
+    const r = await pool.query(`SELECT display_name FROM users WHERE user_sub = $1`, [sub]);
+    if (r.rowCount) return r.rows[0].display_name as string;
+  } catch {
+    // ignore; fallback below
+  }
+
+  return displayNameFromUser(req.user);
+}
 
 export function health(_req: Request, res: Response) {
   res.json({ ok: true, time: new Date().toISOString() });
@@ -27,7 +60,7 @@ export function me(req: Request, res: Response) {
 
 export async function listChecklists(req: Request, res: Response) {
   const u = req.user!;
-  await seedIfEmpty(u.sub, userLabel(req));
+  await seedIfEmpty(u.sub, await userLabel(req));
 
   const rows = await pool.query(
     `SELECT id, title, created_at
@@ -37,7 +70,7 @@ export async function listChecklists(req: Request, res: Response) {
     [u.sub]
   );
 
-  const checklists = [] as any[];
+  const checklists: any[] = [];
   for (const r of rows.rows) {
     const steps = await pool.query(
       `SELECT id, label, done, updated_at, updated_by
@@ -129,7 +162,7 @@ export async function addStep(req: Request, res: Response) {
 
   const stepId = nanoid();
   const updatedAt = nowIso();
-  const updatedBy = userLabel(req);
+  const updatedBy = await userLabel(req);
 
   await pool.query(
     `INSERT INTO checklist_steps (id, checklist_id, label, done, updated_at, updated_by)
@@ -149,15 +182,15 @@ export async function toggleStep(req: Request, res: Response) {
   const exists = await pool.query(`SELECT 1 FROM checklists WHERE user_sub = $1 AND id = $2`, [u.sub, checklistId]);
   if (exists.rowCount === 0) return res.status(404).json({ error: "not_found" });
 
-  const s = await pool.query(
-    `SELECT id, done FROM checklist_steps WHERE checklist_id = $1 AND id = $2`,
-    [checklistId, stepId]
-  );
+  const s = await pool.query(`SELECT id, done FROM checklist_steps WHERE checklist_id = $1 AND id = $2`, [
+    checklistId,
+    stepId,
+  ]);
   if (s.rowCount === 0) return res.status(404).json({ error: "not_found" });
 
   const nextDone = !s.rows[0].done;
   const updatedAt = nowIso();
-  const updatedBy = userLabel(req);
+  const updatedBy = await userLabel(req);
 
   await pool.query(
     `UPDATE checklist_steps
@@ -176,7 +209,7 @@ export async function toggleStep(req: Request, res: Response) {
 
 export async function listIncidents(req: Request, res: Response) {
   const u = req.user!;
-  await seedIfEmpty(u.sub, userLabel(req));
+  await seedIfEmpty(u.sub, await userLabel(req));
 
   const incidents = await pool.query(
     `SELECT id, title, severity, status, created_at
@@ -186,16 +219,17 @@ export async function listIncidents(req: Request, res: Response) {
     [u.sub]
   );
 
-  const mapped = [] as any[];
+  const mapped: any[] = [];
   for (const i of incidents.rows) {
+    // IMPORTANT: don't filter updates by user_sub unless your schema truly requires it.
+    // The incident is already scoped by incidents.user_sub.
     const updates = await pool.query(
-    `SELECT id, note, by_label as "by", at
-    FROM incident_updates
-    WHERE incident_id = $1 AND user_sub = $2
-    ORDER BY at DESC`,
-    [i.id, u.sub]
-  );
-
+      `SELECT id, note, by_label as "by", at
+       FROM incident_updates
+       WHERE incident_id = $1
+       ORDER BY at DESC`,
+      [i.id]
+    );
 
     mapped.push({
       id: i.id,
@@ -203,7 +237,7 @@ export async function listIncidents(req: Request, res: Response) {
       severity: i.severity,
       status: i.status,
       createdAt: i.created_at,
-      updates: updates.rows.map((u) => ({ id: u.id, note: u.note, by: u.by, at: u.at })),
+      updates: updates.rows.map((u2) => ({ id: u2.id, note: u2.note, by: u2.by, at: u2.at })),
     });
   }
 
@@ -232,21 +266,17 @@ export async function addIncidentUpdate(req: Request, res: Response) {
   const u = req.user!;
   const incidentId = req.params.id;
 
-  const exists = await pool.query(
-    `SELECT 1 FROM incidents WHERE user_sub = $1 AND id = $2`,
-    [u.sub, incidentId]
-  );
+  const exists = await pool.query(`SELECT 1 FROM incidents WHERE user_sub = $1 AND id = $2`, [u.sub, incidentId]);
   if (exists.rowCount === 0) return res.status(404).json({ error: "not_found" });
 
   const parsed = addIncidentUpdateSchema.safeParse(req.body);
-  if (!parsed.success) {
-    return res.status(400).json({ error: "validation", details: parsed.error.flatten() });
-  }
+  if (!parsed.success) return res.status(400).json({ error: "validation", details: parsed.error.flatten() });
 
   const id = nanoid();
   const at = nowIso();
-  const by = userLabel(req);
+  const by = await userLabel(req);
 
+  // user_sub here should be the author of the update (so joins work later)
   await pool.query(
     `INSERT INTO incident_updates (id, incident_id, user_sub, note, by_label, at)
      VALUES ($1, $2, $3, $4, $5, $6)`,
@@ -256,7 +286,6 @@ export async function addIncidentUpdate(req: Request, res: Response) {
   await audit(u.sub, "add_update", "incident", incidentId, { updateId: id });
   res.status(201).json({ id, note: parsed.data.note, by, at });
 }
-
 
 export async function patchIncidentStatus(req: Request, res: Response) {
   const u = req.user!;
@@ -268,46 +297,44 @@ export async function patchIncidentStatus(req: Request, res: Response) {
   const parsed = patchIncidentStatusSchema.safeParse(req.body);
   if (!parsed.success) return res.status(400).json({ error: "validation", details: parsed.error.flatten() });
 
-  await pool.query(`UPDATE incidents SET status = $1 WHERE id = $2 AND user_sub = $3`, [parsed.data.status, incidentId, u.sub]);
-  await audit(u.sub, "status", "incident", incidentId, { status: parsed.data.status });
+  await pool.query(`UPDATE incidents SET status = $1 WHERE id = $2 AND user_sub = $3`, [
+    parsed.data.status,
+    incidentId,
+    u.sub,
+  ]);
 
+  await audit(u.sub, "status", "incident", incidentId, { status: parsed.data.status });
   res.json({ ok: true, id: incidentId, status: parsed.data.status });
 }
-
 
 // -----------------------------------------------------------------------------
 // Team / Presence
 // -----------------------------------------------------------------------------
-// A simple shared team feed (no explicit recipient).
-// Mentions: use @handle in message body; stored in a text[] column.
-
-function toHandle(label: string) {
-  const s = (label || "").trim().toLowerCase();
-  if (s.includes("@")) return s.split("@")[0].replace(/[^a-z0-9_\-\.]/g, "");
-  return s.replace(/\s+/g, "").replace(/[^a-z0-9_\-\.]/g, "");
-}
 
 function extractMentions(body: string): string[] {
   const out: string[] = [];
-  const re = /@([a-zA-Z0-9_\-\.]+)/g;
+  const re = /@([a-zA-Z0-9_.-]+)/g;
   let m: RegExpExecArray | null;
   while ((m = re.exec(body))) out.push(m[1].toLowerCase());
   return Array.from(new Set(out)).slice(0, 20);
 }
 
 export async function listMessages(_req: Request, res: Response) {
+  // Return display names from users table (no more auth0 sub strings)
   const rows = await pool.query(
-    `SELECT id,
-            user_sub,
-            by_label as "by",
-            handle,
-            body,
-            created_at as "createdAt",
-            mentions
-     FROM team_messages
-     ORDER BY created_at DESC
+    `SELECT tm.id,
+            tm.user_sub as "userSub",
+            u.display_name as "by",
+            tm.handle,
+            tm.body,
+            tm.created_at as "createdAt",
+            tm.mentions
+     FROM team_messages tm
+     JOIN users u ON u.user_sub = tm.user_sub
+     ORDER BY tm.created_at DESC
      LIMIT 200`
   );
+
   res.json(rows.rows);
 }
 
@@ -318,8 +345,8 @@ export async function sendMessage(req: Request, res: Response) {
 
   const id = nanoid();
   const createdAt = nowIso();
-  const by = userLabel(req);
-  const handle = toHandle(by) || (u.sub || "user");
+  const by = await userLabel(req);
+  const handle = toHandle(by) || u.sub || "user";
   const mentions = extractMentions(parsed.data.body);
 
   await pool.query(
@@ -335,24 +362,9 @@ export async function sendMessage(req: Request, res: Response) {
 export async function pingPresence(req: Request, res: Response) {
   const u = req.user!;
   const parsed = pingPresenceSchema.safeParse(req.body || {});
-  if (!parsed.success) {
-    return res.status(400).json({ error: "validation", details: parsed.error.flatten() });
-  }
+  if (!parsed.success) return res.status(400).json({ error: "validation", details: parsed.error.flatten() });
 
-  // Safely read optional claims from the authenticated user object
-  const claims = u as Record<string, unknown>;
-
-  // What we show in the UI (human-friendly)
-  const label =
-    (typeof claims["name"] === "string" && claims["name"]) ||
-    (typeof claims["nickname"] === "string" && claims["nickname"]) ||
-    (typeof claims["email"] === "string" && claims["email"]) ||
-    u.email ||
-    u.name ||
-    u.sub ||
-    "user";
-
-  // What we use for @mentions / stable identity
+  const label = await userLabel(req);
   const handle = toHandle(label) || u.sub || "user";
   const now = nowIso();
 
@@ -370,21 +382,23 @@ export async function pingPresence(req: Request, res: Response) {
   res.json({ ok: true });
 }
 
-export async function listOnline(req: Request, res: Response) {
+export async function listOnline(_req: Request, res: Response) {
+  // presence has label/handle, but we want real display names from users
   const rows = await pool.query(
     `SELECT
-        user_sub as "userSub",
-        label as "displayName",
-        page,
-        handle,
-        label,
-        last_seen as "lastSeen"
-     FROM presence
-     WHERE last_seen > (NOW() - INTERVAL '90 seconds')
-     ORDER BY last_seen DESC
+        p.user_sub as "userSub",
+        u.display_name as "displayName",
+        u.email as "email",
+        u.picture_url as "pictureUrl",
+        p.page as "page",
+        p.handle as "handle",
+        p.last_seen as "lastSeen"
+     FROM presence p
+     JOIN users u ON u.user_sub = p.user_sub
+     WHERE p.last_seen > (NOW() - INTERVAL '90 seconds')
+     ORDER BY p.last_seen DESC
      LIMIT 50`
   );
 
   res.json(rows.rows);
 }
-
