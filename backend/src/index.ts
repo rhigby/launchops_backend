@@ -48,17 +48,17 @@ async function main() {
   app.get("/api/checklists", requireAuth, h.listChecklists);
   app.post("/api/checklists", requireAuth, h.createChecklist);
   app.get("/api/checklists/:id", requireAuth, h.getChecklist);
-  app.post("/api/checklists/:id/steps", requireAuth, h.addStep);
-  app.post("/api/checklists/:id/steps/:stepId/toggle", requireAuth, h.toggleStep);
   app.delete("/api/checklists/:id", requireAuth, h.deleteChecklist);
-  app.delete("/api/checklists/:id/steps/:stepId", requireAuth, h.deleteStep);
+  app.post("/api/checklists/:id/steps", requireAuth, h.addStep);
+  app.delete("/api/checklists/:id/steps/:stepId", requireAuth, h.deleteChecklistStep);
+  app.post("/api/checklists/:id/steps/:stepId/toggle", requireAuth, h.toggleStep);
 
   // Incidents
   app.get("/api/incidents", requireAuth, h.listIncidents);
   app.post("/api/incidents", requireAuth, h.createIncident);
   app.post("/api/incidents/:id/updates", requireAuth, h.addIncidentUpdate);
-  app.patch("/api/incidents/:id/status", requireAuth, h.patchIncidentStatus);
   app.delete("/api/incidents/:id", requireAuth, h.deleteIncident);
+  app.patch("/api/incidents/:id/status", requireAuth, h.patchIncidentStatus);
 
   // Team feed + online users (no ping endpoint needed)
   app.get("/api/messages", requireAuth, h.listMessages);
