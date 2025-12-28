@@ -61,11 +61,7 @@ export function health(_req: Request, res: Response) {
  */
 export async function me(req: Request, res: Response) {
   const u = req.user!;
-  const hdrName = typeof req.header("x-user-name") === "string" ? req.header("x-user-name")!.trim() : "";
-  const hdrEmail = typeof req.header("x-user-email") === "string" ? req.header("x-user-email")!.trim() : "";
-  const hdrPic = typeof req.header("x-user-picture") === "string" ? req.header("x-user-picture")!.trim() : "";
-
-  const displayName = (hdrName || displayNameFromUser(u));
+  const displayName = displayNameFromUser(u);
   const handle = toHandle(displayName) || toHandle(u.sub || "user");
 
   // Upsert user profile + last_seen
@@ -88,7 +84,7 @@ export async function me(req: Request, res: Response) {
         ELSE users.display_name
       END
     `,
-    [u.sub, (hdrEmail || u.email || null), displayName, (hdrPic || u.picture || null), handle]
+    [u.sub, u.email ?? null, displayName, u.picture ?? null, handle]
   );
 
   res.json({ user: u });
@@ -243,6 +239,34 @@ export async function toggleStep(req: Request, res: Response) {
   res.json({ ok: true, stepId, done: nextDone, updatedAt, updatedBy });
 }
 
+
+export async function deleteChecklist(req: Request, res: Response) {
+  const u = req.user!;
+  const checklistId = req.params.id;
+
+  const del = await pool.query(`DELETE FROM checklists WHERE user_sub = $1 AND id = $2`, [u.sub, checklistId]);
+  if (del.rowCount === 0) return res.status(404).json({ error: "not_found" });
+
+  await audit(u.sub, "delete_checklist", "checklist", checklistId, {});
+  return res.json({ ok: true });
+}
+
+export async function deleteStep(req: Request, res: Response) {
+  const u = req.user!;
+  const checklistId = req.params.id;
+  const stepId = req.params.stepId;
+
+  const exists = await pool.query(`SELECT 1 FROM checklists WHERE user_sub = $1 AND id = $2`, [u.sub, checklistId]);
+  if (exists.rowCount === 0) return res.status(404).json({ error: "not_found" });
+
+  const del = await pool.query(`DELETE FROM checklist_steps WHERE checklist_id = $1 AND id = $2`, [checklistId, stepId]);
+  if (del.rowCount === 0) return res.status(404).json({ error: "not_found" });
+
+  await audit(u.sub, "delete_step", "checklist", checklistId, { stepId });
+  return res.json({ ok: true });
+}
+
+
 // -----------------------------------------------------------------------------
 // Incidents
 // -----------------------------------------------------------------------------
@@ -349,54 +373,40 @@ export async function patchIncidentStatus(req: Request, res: Response) {
   res.json({ ok: true, id: incidentId, status: parsed.data.status });
 }
 
+
+export async function deleteIncident(req: Request, res: Response) {
+  const u = req.user!;
+  const incidentId = req.params.id;
+
+  const del = await pool.query(`DELETE FROM incidents WHERE user_sub = $1 AND id = $2`, [u.sub, incidentId]);
+  if (del.rowCount === 0) return res.status(404).json({ error: "not_found" });
+
+  await audit(u.sub, "delete_incident", "incident", incidentId, {});
+  return res.json({ ok: true });
+}
+
+
 // -----------------------------------------------------------------------------
 // Team feed + Online users (derived from users.last_seen, no ping endpoint needed)
 // -----------------------------------------------------------------------------
 
-export async function listMessages(req: Request, res: Response) {
-  const limitRaw = Number(req.query.limit ?? 30);
-  const limit = Number.isFinite(limitRaw) ? Math.min(Math.max(limitRaw, 1), 100) : 30;
-
-  const before = typeof req.query.before === "string" ? req.query.before : null;
-  const beforeId = typeof req.query.beforeId === "string" ? req.query.beforeId : null;
-
-  const params: any[] = [];
-  let where = "";
-
-  if (before && beforeId) {
-    params.push(before, beforeId);
-    where = `WHERE (tm.created_at, tm.id) < ($1::timestamptz, $2::text)`;
-  }
-
-  // fetch one extra row so we can report hasMore
-  params.push(limit + 1);
-
-  const sql = `
-    SELECT
-      tm.id,
-      tm.user_sub as "userSub",
-      COALESCE(u.display_name, tm.by_label) as "by",
-      tm.handle,
-      tm.body,
-      tm.created_at as "createdAt",
-      tm.mentions,
-      tm.page
-    FROM team_messages tm
-    LEFT JOIN users u ON u.user_sub = tm.user_sub
-    ${where}
-    ORDER BY tm.created_at DESC, tm.id DESC
-    LIMIT $${params.length}
-  `;
-
-  const rows = await pool.query(sql, params);
-
-  const items = rows.rows.slice(0, limit);
-  const hasMore = rows.rows.length > limit;
-
-  const last = items[items.length - 1];
-  const next = last ? { before: last.createdAt, beforeId: last.id } : null;
-
-  res.json({ items, hasMore, next });
+export async function listMessages(_req: Request, res: Response) {
+  const rows = await pool.query(
+    `SELECT
+        tm.id,
+        tm.user_sub as "userSub",
+        COALESCE(u.display_name, tm.by_label) as "by",
+        tm.handle,
+        tm.body,
+        tm.created_at as "createdAt",
+        tm.mentions,
+        tm.page
+     FROM team_messages tm
+     LEFT JOIN users u ON u.user_sub = tm.user_sub
+     ORDER BY tm.created_at DESC
+     LIMIT 200`
+  );
+  res.json(rows.rows);
 }
 
 export async function sendMessage(req: Request, res: Response) {
