@@ -37,7 +37,7 @@ export const patchIncidentStatusSchema = z.object({
 export const sendMessageSchema = z.object({
   body: z.string().min(1).max(2000),
   page: z.string().max(200).optional(),
-  imageId: z.string().optional()
+  imageId: z.string().optional().nullable()
 });
 
 export const pingPresenceSchema = z.object({

@@ -459,7 +459,6 @@ export async function sendMessage(req: Request, res: Response) {
   const handle = toHandle(by) || toHandle(u.sub || "user");
   const mentions = extractMentions(parsed.data.body);
 
-  // ✅ imageId comes from the request body, not req.user
   const imageId = parsed.data.imageId ?? null;
 
   const row = await pool.query(
@@ -478,10 +477,8 @@ export async function sendMessage(req: Request, res: Response) {
     [id, u.sub, by, handle, parsed.data.body, parsed.data.page || null, mentions, imageId, createdAt]
   );
 
-  // ✅ do side-effects after, but do NOT respond again
   await audit(u.sub, "message", "team", id, { mentions, page: parsed.data.page || null, imageId });
 
-  // ✅ only response
   return res.status(201).json(row.rows[0]);
 }
 
