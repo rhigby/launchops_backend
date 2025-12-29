@@ -482,7 +482,7 @@ export async function sendMessage(req: Request, res: Response) {
   const imageId = u.imageId ?? null;
 
   const row = await pool.query(
-    `INSERT INTO team_messages (id, user_sub, by, handle, body, page, mentions, image_id, created_at)
+    `INSERT INTO team_messages (id, user_sub, by_label, handle, body, page, mentions, image_id, created_at)
     VALUES ($1,$2,$3,$4,$5,$6,$7, now())
     RETURNING
       id,
