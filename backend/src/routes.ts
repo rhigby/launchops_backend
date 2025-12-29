@@ -26,12 +26,8 @@ const upload = multer({
   limits: { fileSize: 5 * 1024 * 1024 }, // 5MB
 });
 
-// used in index.ts: app.post("/api/uploads", requireAuth, h.uploadSingle, h.uploadFile)
 export const uploadSingle = upload.single("file");
 
-/**
- * Converts a human label into a stable @handle-friendly string
- */
 function toHandle(label: string): string {
   const s = (label || "").trim().toLowerCase();
   if (s.includes("@")) return s.split("@")[0].replace(/[^a-z0-9_.-]/g, "");
@@ -49,10 +45,6 @@ function extractMentions(body: string): string[] {
   return Array.from(new Set(out)).slice(0, 20);
 }
 
-/**
- * Build a nice display name from Auth0/OIDC claims
- * (This fixes “Cannot find name displayNameFromUser” by defining it here.)
- */
 function displayNameFromUser(u: any): string {
   return (
     (typeof u?.name === "string" && u.name) ||
@@ -70,11 +62,6 @@ export function health(_req: Request, res: Response) {
   res.json({ ok: true, time: new Date().toISOString() });
 }
 
-/**
- * me()
- * IMPORTANT: This is where we upsert into `users` and update last_seen.
- * We DO NOT use /presence/ping anymore.
- */
 export async function me(req: Request, res: Response) {
   const u = req.user!;
   const hdrName = typeof req.header("x-user-name") === "string" ? req.header("x-user-name")!.trim() : "";
@@ -84,7 +71,6 @@ export async function me(req: Request, res: Response) {
   const displayName = (hdrName || displayNameFromUser(u));
   const handle = toHandle(displayName) || toHandle(u.sub || "user");
 
-  // Upsert user profile + last_seen
   await pool.query(
     `
     INSERT INTO users (user_sub, email, display_name, picture_url, handle, last_seen, updated_at)
@@ -206,8 +192,6 @@ export async function getChecklist(req: Request, res: Response) {
   });
 }
 
-
-
 export async function deleteChecklist(req: Request, res: Response) {
   const u = req.user!;
   const checklistId = req.params.id;
@@ -215,7 +199,6 @@ export async function deleteChecklist(req: Request, res: Response) {
   const exists = await pool.query(`SELECT 1 FROM checklists WHERE user_sub = $1 AND id = $2`, [u.sub, checklistId]);
   if (exists.rowCount === 0) return res.status(404).json({ error: "not_found" });
 
-  // Delete children first (in case FK is not cascading)
   await pool.query(`DELETE FROM checklist_steps WHERE checklist_id = $1`, [checklistId]);
   await pool.query(`DELETE FROM checklists WHERE id = $1 AND user_sub = $2`, [checklistId, u.sub]);
 
@@ -379,8 +362,6 @@ export async function addIncidentUpdate(req: Request, res: Response) {
   res.status(201).json({ id, note: parsed.data.note, by: byLabel, at });
 }
 
-
-
 export async function deleteIncident(req: Request, res: Response) {
   const u = req.user!;
   const incidentId = req.params.id;
@@ -388,7 +369,6 @@ export async function deleteIncident(req: Request, res: Response) {
   const exists = await pool.query(`SELECT 1 FROM incidents WHERE user_sub = $1 AND id = $2`, [u.sub, incidentId]);
   if (exists.rowCount === 0) return res.status(404).json({ error: "not_found" });
 
-  // Delete children first (in case FK is not cascading)
   await pool.query(`DELETE FROM incident_updates WHERE incident_id = $1`, [incidentId]);
   await pool.query(`DELETE FROM incidents WHERE id = $1 AND user_sub = $2`, [incidentId, u.sub]);
 
@@ -416,7 +396,7 @@ export async function patchIncidentStatus(req: Request, res: Response) {
 }
 
 // -----------------------------------------------------------------------------
-// Team feed + Online users (derived from users.last_seen, no ping endpoint needed)
+// Team feed + Online users
 // -----------------------------------------------------------------------------
 
 export async function listMessages(req: Request, res: Response) {
@@ -434,7 +414,6 @@ export async function listMessages(req: Request, res: Response) {
     where = `WHERE (tm.created_at, tm.id) < ($1::timestamptz, $2::text)`;
   }
 
-  // fetch one extra row so we can report hasMore
   params.push(limit + 1);
 
   const sql = `
@@ -483,7 +462,7 @@ export async function sendMessage(req: Request, res: Response) {
 
   const row = await pool.query(
     `INSERT INTO team_messages (id, user_sub, by_label, handle, body, page, mentions, image_id, created_at)
-    VALUES ($1,$2,$3,$4,$5,$6,$7, now())
+    VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
     RETURNING
       id,
       user_sub as "userSub",
@@ -491,6 +470,7 @@ export async function sendMessage(req: Request, res: Response) {
       handle,
       body,
       page,
+      mentions,
       image_id as "imageId",
       created_at as "createdAt"`,
     [id, u.sub, by, handle, parsed.data.body, parsed.data.page || null, mentions, imageId, createdAt]
