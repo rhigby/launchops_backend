@@ -447,7 +447,7 @@ export async function listMessages(req: Request, res: Response) {
       tm.created_at as "createdAt",
       tm.mentions,
       tm.page,
-      tm.image_id as "imageId",
+      tm.image_id as "imageId"
     FROM team_messages tm
     LEFT JOIN users u ON u.user_sub = tm.user_sub
     ${where}
