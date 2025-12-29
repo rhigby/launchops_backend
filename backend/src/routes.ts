@@ -448,7 +448,9 @@ export async function listMessages(req: Request, res: Response) {
 export async function sendMessage(req: Request, res: Response) {
   const u = req.user!;
   const parsed = sendMessageSchema.safeParse(req.body);
-  if (!parsed.success) return res.status(400).json({ error: "validation", details: parsed.error.flatten() });
+  if (!parsed.success) {
+    return res.status(400).json({ error: "validation", details: parsed.error.flatten() });
+  }
 
   const id = nanoid();
   const createdAt = nowIso();
@@ -457,30 +459,32 @@ export async function sendMessage(req: Request, res: Response) {
   const handle = toHandle(by) || toHandle(u.sub || "user");
   const mentions = extractMentions(parsed.data.body);
 
-
-  const imageId = u.imageId ?? null;
+  // ✅ imageId comes from the request body, not req.user
+  const imageId = parsed.data.imageId ?? null;
 
   const row = await pool.query(
     `INSERT INTO team_messages (id, user_sub, by_label, handle, body, page, mentions, image_id, created_at)
-    VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
-    RETURNING
-      id,
-      user_sub as "userSub",
-      by_label,
-      handle,
-      body,
-      page,
-      mentions,
-      image_id as "imageId",
-      created_at as "createdAt"`,
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
+     RETURNING
+       id,
+       user_sub as "userSub",
+       by_label as "byLabel",
+       handle,
+       body,
+       page,
+       mentions,
+       image_id as "imageId",
+       created_at as "createdAt"`,
     [id, u.sub, by, handle, parsed.data.body, parsed.data.page || null, mentions, imageId, createdAt]
   );
-  res.json(row.rows[0]);
 
+  // ✅ do side-effects after, but do NOT respond again
+  await audit(u.sub, "message", "team", id, { mentions, page: parsed.data.page || null, imageId });
 
-  await audit(u.sub, "message", "team", id, { mentions, page: parsed.data.page || null });
-  res.status(201).json({ id, userSub: u.sub, by, handle, body: parsed.data.body, mentions, createdAt });
+  // ✅ only response
+  return res.status(201).json(row.rows[0]);
 }
+
 
 export async function listOnline(_req: Request, res: Response) {
   const rows = await pool.query(
