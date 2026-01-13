@@ -294,11 +294,9 @@ export async function listIncidents(req: Request, res: Response) {
   await seedIfEmpty(u.sub, userLabel(req));
 
   const incidents = await pool.query(
-    `SELECT id, title, severity, status, created_at
+    `SELECT id, title, severity, status, user_sub, created_at
      FROM incidents
-     WHERE user_sub = $1
-     ORDER BY created_at DESC`,
-    [u.sub]
+     ORDER BY created_at DESC`
   );
 
   const mapped: any[] = [];
@@ -321,6 +319,7 @@ export async function listIncidents(req: Request, res: Response) {
       title: i.title,
       severity: i.severity,
       status: i.status,
+      createdBy: i.user_sub,
       createdAt: i.created_at,
       updates: updates.rows.map((row) => ({ id: row.id, note: row.note, by: row.by, at: row.at })),
     });
@@ -353,7 +352,7 @@ export async function addIncidentUpdate(req: Request, res: Response) {
   if (!u) return res.status(401).json({ error: "unauthorized" });
   const incidentId = req.params.id;
 
-  const exists = await pool.query(`SELECT 1 FROM incidents WHERE user_sub = $1 AND id = $2`, [u.sub, incidentId]);
+  const exists = await pool.query(`SELECT 1 FROM incidents WHERE id = $1`, [incidentId]);
   if (exists.rowCount === 0) return res.status(404).json({ error: "not_found" });
 
   const parsed = addIncidentUpdateSchema.safeParse(req.body);
@@ -378,7 +377,7 @@ export async function deleteIncident(req: Request, res: Response) {
   if (!u) return res.status(401).json({ error: "unauthorized" });
   const incidentId = req.params.id;
 
-  const exists = await pool.query(`SELECT 1 FROM incidents WHERE user_sub = $1 AND id = $2`, [u.sub, incidentId]);
+  const exists = await pool.query(`SELECT 1 FROM incidents WHERE id = $1`, [incidentId]);
   if (exists.rowCount === 0) return res.status(404).json({ error: "not_found" });
 
   await pool.query(`DELETE FROM incident_updates WHERE incident_id = $1`, [incidentId]);
@@ -392,7 +391,7 @@ export async function patchIncidentStatus(req: Request, res: Response) {
   if (!u) return res.status(401).json({ error: "unauthorized" });
   const incidentId = req.params.id;
 
-  const exists = await pool.query(`SELECT 1 FROM incidents WHERE user_sub = $1 AND id = $2`, [u.sub, incidentId]);
+  const exists = await pool.query(`SELECT 1 FROM incidents WHERE id = $1`, [incidentId]);
   if (exists.rowCount === 0) return res.status(404).json({ error: "not_found" });
 
   const parsed = patchIncidentStatusSchema.safeParse(req.body);

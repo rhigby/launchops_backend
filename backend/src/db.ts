@@ -171,18 +171,17 @@ export async function seedIfEmpty(userSub: string, userLabel: string) {
       );
     }
   }
-
-  // 2) Per-user incident seed (run once per user)
-  const cUserInc = await pool.query(`SELECT COUNT(1)::int AS c FROM incidents WHERE user_sub = $1`, [userSub]);
-  if ((cUserInc.rows?.[0]?.c ?? 0) === 0) {
+  // 2) Global incident seed (run once across the whole DB)
+  const cAllInc = await pool.query(`SELECT COUNT(1)::int AS c FROM incidents`);
+  if ((cAllInc.rows?.[0]?.c ?? 0) === 0) {
     const incidentId = nanoid();
     await pool.query(
       `INSERT INTO incidents (id, user_sub, title, severity, status, created_at)
        VALUES ($1, $2, $3, $4, $5, NOW())`,
+      // store the creator for audit/edit permissions
       [incidentId, userSub, "OAuth redirect loop observed on client network", 2, "investigating"]
     );
 
-    // FIX: use by_label + user_sub (not legacy column "by")
     await pool.query(
       `INSERT INTO incident_updates (id, incident_id, user_sub, note, at, by_label)
        VALUES ($1, $2, $3, $4, NOW(), $5)`,
@@ -192,3 +191,4 @@ export async function seedIfEmpty(userSub: string, userLabel: string) {
     await audit(userSub, "seed", "system", "seed", { created: true });
   }
 }
+
