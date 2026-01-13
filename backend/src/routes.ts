@@ -63,7 +63,8 @@ export function health(_req: Request, res: Response) {
 }
 
 export async function me(req: Request, res: Response) {
-  const u = req.user!;
+  const u = req.user;
+  if (!u) return res.status(401).json({ error: "unauthorized" });
   const hdrName = typeof req.header("x-user-name") === "string" ? req.header("x-user-name")!.trim() : "";
   const hdrEmail = typeof req.header("x-user-email") === "string" ? req.header("x-user-email")!.trim() : "";
   const hdrPic = typeof req.header("x-user-picture") === "string" ? req.header("x-user-picture")!.trim() : "";
@@ -101,7 +102,8 @@ export async function me(req: Request, res: Response) {
 // -----------------------------------------------------------------------------
 
 export async function listChecklists(req: Request, res: Response) {
-  const u = req.user!;
+  const u = req.user;
+  if (!u) return res.status(401).json({ error: "unauthorized" });
   await seedIfEmpty(u.sub, userLabel(req));
 
   const rows = await pool.query(
@@ -140,7 +142,8 @@ export async function listChecklists(req: Request, res: Response) {
 }
 
 export async function createChecklist(req: Request, res: Response) {
-  const u = req.user!;
+  const u = req.user;
+  if (!u) return res.status(401).json({ error: "unauthorized" });
   const parsed = createChecklistSchema.safeParse(req.body);
   if (!parsed.success) return res.status(400).json({ error: "validation", details: parsed.error.flatten() });
 
@@ -158,7 +161,8 @@ export async function createChecklist(req: Request, res: Response) {
 }
 
 export async function getChecklist(req: Request, res: Response) {
-  const u = req.user!;
+  const u = req.user;
+  if (!u) return res.status(401).json({ error: "unauthorized" });
   const id = req.params.id;
 
   const c = await pool.query(
@@ -193,7 +197,8 @@ export async function getChecklist(req: Request, res: Response) {
 }
 
 export async function deleteChecklist(req: Request, res: Response) {
-  const u = req.user!;
+  const u = req.user;
+  if (!u) return res.status(401).json({ error: "unauthorized" });
   const checklistId = req.params.id;
 
   const exists = await pool.query(`SELECT 1 FROM checklists WHERE user_sub = $1 AND id = $2`, [u.sub, checklistId]);
@@ -207,7 +212,8 @@ export async function deleteChecklist(req: Request, res: Response) {
 }
 
 export async function deleteChecklistStep(req: Request, res: Response) {
-  const u = req.user!;
+  const u = req.user;
+  if (!u) return res.status(401).json({ error: "unauthorized" });
   const checklistId = req.params.id;
   const stepId = req.params.stepId;
 
@@ -224,7 +230,8 @@ export async function deleteChecklistStep(req: Request, res: Response) {
   return res.status(204).send();
 }
 export async function addStep(req: Request, res: Response) {
-  const u = req.user!;
+  const u = req.user;
+  if (!u) return res.status(401).json({ error: "unauthorized" });
   const checklistId = req.params.id;
 
   const exists = await pool.query(`SELECT 1 FROM checklists WHERE user_sub = $1 AND id = $2`, [u.sub, checklistId]);
@@ -248,7 +255,8 @@ export async function addStep(req: Request, res: Response) {
 }
 
 export async function toggleStep(req: Request, res: Response) {
-  const u = req.user!;
+  const u = req.user;
+  if (!u) return res.status(401).json({ error: "unauthorized" });
   const checklistId = req.params.id;
   const stepId = req.params.stepId;
 
@@ -281,7 +289,8 @@ export async function toggleStep(req: Request, res: Response) {
 // -----------------------------------------------------------------------------
 
 export async function listIncidents(req: Request, res: Response) {
-  const u = req.user!;
+  const u = req.user;
+  if (!u) return res.status(401).json({ error: "unauthorized" });
   await seedIfEmpty(u.sub, userLabel(req));
 
   const incidents = await pool.query(
@@ -321,7 +330,8 @@ export async function listIncidents(req: Request, res: Response) {
 }
 
 export async function createIncident(req: Request, res: Response) {
-  const u = req.user!;
+  const u = req.user;
+  if (!u) return res.status(401).json({ error: "unauthorized" });
   const parsed = createIncidentSchema.safeParse(req.body);
   if (!parsed.success) return res.status(400).json({ error: "validation", details: parsed.error.flatten() });
 
@@ -339,7 +349,8 @@ export async function createIncident(req: Request, res: Response) {
 }
 
 export async function addIncidentUpdate(req: Request, res: Response) {
-  const u = req.user!;
+  const u = req.user;
+  if (!u) return res.status(401).json({ error: "unauthorized" });
   const incidentId = req.params.id;
 
   const exists = await pool.query(`SELECT 1 FROM incidents WHERE user_sub = $1 AND id = $2`, [u.sub, incidentId]);
@@ -363,7 +374,8 @@ export async function addIncidentUpdate(req: Request, res: Response) {
 }
 
 export async function deleteIncident(req: Request, res: Response) {
-  const u = req.user!;
+  const u = req.user;
+  if (!u) return res.status(401).json({ error: "unauthorized" });
   const incidentId = req.params.id;
 
   const exists = await pool.query(`SELECT 1 FROM incidents WHERE user_sub = $1 AND id = $2`, [u.sub, incidentId]);
@@ -376,7 +388,8 @@ export async function deleteIncident(req: Request, res: Response) {
   return res.status(204).send();
 }
 export async function patchIncidentStatus(req: Request, res: Response) {
-  const u = req.user!;
+  const u = req.user;
+  if (!u) return res.status(401).json({ error: "unauthorized" });
   const incidentId = req.params.id;
 
   const exists = await pool.query(`SELECT 1 FROM incidents WHERE user_sub = $1 AND id = $2`, [u.sub, incidentId]);
@@ -446,7 +459,8 @@ export async function listMessages(req: Request, res: Response) {
 }
 
 export async function sendMessage(req: Request, res: Response) {
-  const u = req.user!;
+  const u = req.user;
+  if (!u) return res.status(401).json({ error: "unauthorized" });
   const parsed = sendMessageSchema.safeParse(req.body);
   if (!parsed.success) {
     return res.status(400).json({ error: "validation", details: parsed.error.flatten() });

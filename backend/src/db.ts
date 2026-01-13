@@ -5,9 +5,6 @@ import { config } from "./config.js";
 // -----------------------------------------------------------------------------
 // Postgres connection
 // -----------------------------------------------------------------------------
-// NOTE:
-// - When using Render's INTERNAL DATABASE_URL, SSL is usually not required.
-// - When using an EXTERNAL URL, SSL is typically required.
 export const pool = new Pool({
   connectionString: config.databaseUrl,
   ssl: config.nodeEnv === "production" ? { rejectUnauthorized: false } : undefined,
@@ -18,11 +15,21 @@ export function nowIso() {
 }
 
 // -----------------------------------------------------------------------------
-// Schema (idempotent)
+// Schema (idempotent + forwards-compatible)
 // -----------------------------------------------------------------------------
 export async function migrate() {
-  // Keep the existing SQLite-era schema names so the frontend doesn't change.
+  // Keep the existing SQLite-era table names so the frontend doesn't change.
   await pool.query(`
+    CREATE TABLE IF NOT EXISTS users (
+      user_sub TEXT PRIMARY KEY,
+      email TEXT,
+      display_name TEXT,
+      picture_url TEXT,
+      handle TEXT,
+      last_seen TIMESTAMPTZ,
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
+
     CREATE TABLE IF NOT EXISTS checklists (
       id TEXT PRIMARY KEY,
       user_sub TEXT NOT NULL,
@@ -48,12 +55,35 @@ export async function migrate() {
       created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
     );
 
+    -- NOTE: older versions used column name "by" only.
+    -- Current code expects: user_sub + by_label.
     CREATE TABLE IF NOT EXISTS incident_updates (
       id TEXT PRIMARY KEY,
       incident_id TEXT NOT NULL REFERENCES incidents(id) ON DELETE CASCADE,
+      user_sub TEXT,
       note TEXT NOT NULL,
-      by TEXT NOT NULL,
+      by_label TEXT,
       at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
+
+    CREATE TABLE IF NOT EXISTS team_messages (
+      id TEXT PRIMARY KEY,
+      user_sub TEXT NOT NULL,
+      by_label TEXT NOT NULL,
+      handle TEXT NOT NULL,
+      body TEXT NOT NULL,
+      page TEXT,
+      mentions TEXT[] NOT NULL DEFAULT '{}',
+      image_id TEXT,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
+
+    CREATE TABLE IF NOT EXISTS uploads (
+      id TEXT PRIMARY KEY,
+      user_sub TEXT NOT NULL,
+      content_type TEXT NOT NULL,
+      bytes BYTEA NOT NULL,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
     );
 
     CREATE TABLE IF NOT EXISTS audit_log (
@@ -68,21 +98,39 @@ export async function migrate() {
 
     CREATE INDEX IF NOT EXISTS idx_checklists_user ON checklists(user_sub);
     CREATE INDEX IF NOT EXISTS idx_incidents_user ON incidents(user_sub);
-    CREATE INDEX IF NOT EXISTS idx_steps_checklist ON checklist_steps(checklist_id);
     CREATE INDEX IF NOT EXISTS idx_updates_incident ON incident_updates(incident_id);
+    CREATE INDEX IF NOT EXISTS idx_users_last_seen ON users(last_seen);
+    CREATE INDEX IF NOT EXISTS idx_team_messages_created ON team_messages(created_at);
+    CREATE INDEX IF NOT EXISTS idx_uploads_user ON uploads(user_sub);
+  `);
+
+  // Forward-compat: if DB was created with old columns, patch it without breaking.
+  // (These statements are safe if columns already exist.)
+  await pool.query(`ALTER TABLE incident_updates ADD COLUMN IF NOT EXISTS user_sub TEXT;`);
+  await pool.query(`ALTER TABLE incident_updates ADD COLUMN IF NOT EXISTS by_label TEXT;`);
+
+  // If an older schema has a "by" column, keep it (do not drop), but optionally backfill by_label.
+  // This backfill is safe and idempotent.
+  await pool.query(`
+    DO $$
+    BEGIN
+      IF EXISTS (
+        SELECT 1
+        FROM information_schema.columns
+        WHERE table_name='incident_updates' AND column_name='by'
+      ) THEN
+        UPDATE incident_updates
+        SET by_label = COALESCE(by_label, "by")
+        WHERE by_label IS NULL;
+      END IF;
+    END $$;
   `);
 }
 
 // -----------------------------------------------------------------------------
-// Audit
+// Audit helper
 // -----------------------------------------------------------------------------
-export async function audit(
-  userSub: string,
-  action: string,
-  entityType: string,
-  entityId: string,
-  meta: unknown
-) {
+export async function audit(userSub: string, action: string, entityType: string, entityId: string, meta: any) {
   await pool.query(
     `INSERT INTO audit_log (id, user_sub, action, entity_type, entity_id, at, meta_json)
      VALUES ($1, $2, $3, $4, $5, NOW(), $6)`,
@@ -127,10 +175,11 @@ export async function seedIfEmpty(userSub: string, userLabel: string) {
     [incidentId, userSub, "OAuth redirect loop observed on client network", 2, "investigating"]
   );
 
+  // FIX: use by_label + user_sub (not legacy column "by")
   await pool.query(
-    `INSERT INTO incident_updates (id, incident_id, note, by, at)
-     VALUES ($1, $2, $3, $4, NOW())`,
-    [nanoid(), incidentId, "Added router basename + updated Allowed Web Origins; retesting.", userLabel]
+    `INSERT INTO incident_updates (id, incident_id, user_sub, note, at, by_label)
+     VALUES ($1, $2, $3, $4, NOW(), $5)`,
+    [nanoid(), incidentId, userSub, "Added router basename + updated Allowed Web Origins; retesting.", userLabel]
   );
 
   await audit(userSub, "seed", "system", "seed", { created: true });
