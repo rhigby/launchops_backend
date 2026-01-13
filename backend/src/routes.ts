@@ -201,11 +201,12 @@ export async function deleteChecklist(req: Request, res: Response) {
   if (!u) return res.status(401).json({ error: "unauthorized" });
   const checklistId = req.params.id;
 
-  const exists = await pool.query(`SELECT 1 FROM checklists WHERE user_sub = $1 AND id = $2`, [u.sub, checklistId]);
+  const exists = await pool.query(`SELECT 1 FROM checklists WHERE id = $1`, [checklistId]);
   if (exists.rowCount === 0) return res.status(404).json({ error: "not_found" });
 
   await pool.query(`DELETE FROM checklist_steps WHERE checklist_id = $1`, [checklistId]);
-  await pool.query(`DELETE FROM checklists WHERE id = $1 AND user_sub = $2`, [checklistId, u.sub]);
+  const del = await pool.query(`DELETE FROM checklists WHERE id = $1`, [checklistId]);
+  if (del.rowCount === 0) return res.status(404).json({ error: "not_found" });
 
   await audit(u.sub, "delete", "checklist", checklistId, {});
   return res.status(204).send();
@@ -217,8 +218,8 @@ export async function deleteChecklistStep(req: Request, res: Response) {
   const checklistId = req.params.id;
   const stepId = req.params.stepId;
 
-  const owns = await pool.query(`SELECT 1 FROM checklists WHERE user_sub = $1 AND id = $2`, [u.sub, checklistId]);
-  if (owns.rowCount === 0) return res.status(404).json({ error: "not_found" });
+  const exists = await pool.query(`SELECT 1 FROM checklists WHERE id = $1`, [checklistId]);
+  if (exists.rowCount === 0) return res.status(404).json({ error: "not_found" });
 
   const del = await pool.query(
     `DELETE FROM checklist_steps WHERE id = $1 AND checklist_id = $2`,
@@ -234,7 +235,7 @@ export async function addStep(req: Request, res: Response) {
   if (!u) return res.status(401).json({ error: "unauthorized" });
   const checklistId = req.params.id;
 
-  const exists = await pool.query(`SELECT 1 FROM checklists WHERE user_sub = $1 AND id = $2`, [u.sub, checklistId]);
+    const exists = await pool.query(`SELECT 1 FROM checklists WHERE id = $1`, [checklistId]);
   if (exists.rowCount === 0) return res.status(404).json({ error: "not_found" });
 
   const parsed = addStepSchema.safeParse(req.body);
@@ -260,7 +261,7 @@ export async function toggleStep(req: Request, res: Response) {
   const checklistId = req.params.id;
   const stepId = req.params.stepId;
 
-  const exists = await pool.query(`SELECT 1 FROM checklists WHERE user_sub = $1 AND id = $2`, [u.sub, checklistId]);
+    const exists = await pool.query(`SELECT 1 FROM checklists WHERE id = $1`, [checklistId]);
   if (exists.rowCount === 0) return res.status(404).json({ error: "not_found" });
 
   const s = await pool.query(`SELECT id, done FROM checklist_steps WHERE checklist_id = $1 AND id = $2`, [
@@ -381,7 +382,8 @@ export async function deleteIncident(req: Request, res: Response) {
   if (exists.rowCount === 0) return res.status(404).json({ error: "not_found" });
 
   await pool.query(`DELETE FROM incident_updates WHERE incident_id = $1`, [incidentId]);
-  await pool.query(`DELETE FROM incidents WHERE id = $1 AND user_sub = $2`, [incidentId, u.sub]);
+  const del = await pool.query(`DELETE FROM incidents WHERE id = $1`, [incidentId]);
+  if (del.rowCount === 0) return res.status(404).json({ error: "not_found" });
 
   await audit(u.sub, "delete", "incident", incidentId, {});
   return res.status(204).send();
@@ -397,11 +399,7 @@ export async function patchIncidentStatus(req: Request, res: Response) {
   const parsed = patchIncidentStatusSchema.safeParse(req.body);
   if (!parsed.success) return res.status(400).json({ error: "validation", details: parsed.error.flatten() });
 
-  await pool.query(`UPDATE incidents SET status = $1 WHERE id = $2 AND user_sub = $3`, [
-    parsed.data.status,
-    incidentId,
-    u.sub,
-  ]);
+    await pool.query(`UPDATE incidents SET status = $1 WHERE id = $2`, [parsed.data.status, incidentId]);
   await audit(u.sub, "status", "incident", incidentId, { status: parsed.data.status });
 
   res.json({ ok: true, id: incidentId, status: parsed.data.status });
