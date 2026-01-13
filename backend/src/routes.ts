@@ -107,11 +107,9 @@ export async function listChecklists(req: Request, res: Response) {
   await seedIfEmpty(u.sub, userLabel(req));
 
   const rows = await pool.query(
-    `SELECT id, title, created_at
+    `SELECT id, title, user_sub, created_at
      FROM checklists
-     WHERE user_sub = $1
-     ORDER BY created_at DESC`,
-    [u.sub]
+     ORDER BY created_at DESC`
   );
 
   const checklists: any[] = [];
@@ -127,6 +125,7 @@ export async function listChecklists(req: Request, res: Response) {
     checklists.push({
       id: r.id,
       title: r.title,
+      createdBy: r.user_sub,
       createdAt: r.created_at,
       steps: steps.rows.map((s) => ({
         id: s.id,
@@ -166,10 +165,10 @@ export async function getChecklist(req: Request, res: Response) {
   const id = req.params.id;
 
   const c = await pool.query(
-    `SELECT id, title, created_at
+    `SELECT id, title, user_sub, created_at
      FROM checklists
-     WHERE user_sub = $1 AND id = $2`,
-    [u.sub, id]
+     WHERE id = $1`,
+    [id]
   );
   if (c.rowCount === 0) return res.status(404).json({ error: "not_found" });
 
@@ -185,6 +184,7 @@ export async function getChecklist(req: Request, res: Response) {
   res.json({
     id: row.id,
     title: row.title,
+    createdBy: row.user_sub,
     createdAt: row.created_at,
     steps: steps.rows.map((s) => ({
       id: s.id,

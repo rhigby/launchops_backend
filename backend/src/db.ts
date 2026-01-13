@@ -139,48 +139,56 @@ export async function audit(userSub: string, action: string, entityType: string,
 }
 
 // -----------------------------------------------------------------------------
-// Seed (only when a user has no checklists yet)
+// Seed
+// - Seed ONE global starter checklist (only if the table is empty)
+// - Seed per-user starter incident (only if the user's incidents are empty)
 // -----------------------------------------------------------------------------
 export async function seedIfEmpty(userSub: string, userLabel: string) {
-  const r = await pool.query(`SELECT COUNT(1)::int AS c FROM checklists WHERE user_sub = $1`, [userSub]);
-  if ((r.rows?.[0]?.c ?? 0) > 0) return;
-
-  const checklistId = nanoid();
-  await pool.query(
-    `INSERT INTO checklists (id, user_sub, title, created_at)
-     VALUES ($1, $2, $3, NOW())`,
-    [checklistId, userSub, "Buffalo Go-Live – Core UI Validation"]
-  );
-
-  const steps = [
-    "Confirm Auth0 login + role claims",
-    "Validate responsive layout on laptop + iPad",
-    "Verify WCAG focus states on key flows",
-    "Simulate offline / network-loss behavior",
-    "Capture screenshots for release notes",
-  ];
-
-  for (const label of steps) {
+  // 1) Global checklist seed (run once across the whole DB)
+  const cAll = await pool.query(`SELECT COUNT(1)::int AS c FROM checklists`);
+  if ((cAll.rows?.[0]?.c ?? 0) === 0) {
+    const checklistId = nanoid();
     await pool.query(
-      `INSERT INTO checklist_steps (id, checklist_id, label, done, updated_at, updated_by)
-       VALUES ($1, $2, $3, FALSE, NOW(), $4)`,
-      [nanoid(), checklistId, label, userLabel]
+      `INSERT INTO checklists (id, user_sub, title, created_at)
+       VALUES ($1, $2, $3, NOW())`,
+      // store the creator for audit/edit permissions
+      [checklistId, userSub, "Buffalo Go-Live – Core UI Validation"]
     );
+
+    const steps = [
+      "Confirm Auth0 login + role claims",
+      "Validate responsive layout on laptop + iPad",
+      "Verify WCAG focus states on key flows",
+      "Simulate offline / network-loss behavior",
+      "Capture screenshots for release notes",
+    ];
+
+    for (const label of steps) {
+      await pool.query(
+        `INSERT INTO checklist_steps (id, checklist_id, label, done, updated_at, updated_by)
+         VALUES ($1, $2, $3, FALSE, NOW(), $4)`,
+        [nanoid(), checklistId, label, userLabel]
+      );
+    }
   }
 
-  const incidentId = nanoid();
-  await pool.query(
-    `INSERT INTO incidents (id, user_sub, title, severity, status, created_at)
-     VALUES ($1, $2, $3, $4, $5, NOW())`,
-    [incidentId, userSub, "OAuth redirect loop observed on client network", 2, "investigating"]
-  );
+  // 2) Per-user incident seed (run once per user)
+  const cUserInc = await pool.query(`SELECT COUNT(1)::int AS c FROM incidents WHERE user_sub = $1`, [userSub]);
+  if ((cUserInc.rows?.[0]?.c ?? 0) === 0) {
+    const incidentId = nanoid();
+    await pool.query(
+      `INSERT INTO incidents (id, user_sub, title, severity, status, created_at)
+       VALUES ($1, $2, $3, $4, $5, NOW())`,
+      [incidentId, userSub, "OAuth redirect loop observed on client network", 2, "investigating"]
+    );
 
-  // FIX: use by_label + user_sub (not legacy column "by")
-  await pool.query(
-    `INSERT INTO incident_updates (id, incident_id, user_sub, note, at, by_label)
-     VALUES ($1, $2, $3, $4, NOW(), $5)`,
-    [nanoid(), incidentId, userSub, "Added router basename + updated Allowed Web Origins; retesting.", userLabel]
-  );
+    // FIX: use by_label + user_sub (not legacy column "by")
+    await pool.query(
+      `INSERT INTO incident_updates (id, incident_id, user_sub, note, at, by_label)
+       VALUES ($1, $2, $3, $4, NOW(), $5)`,
+      [nanoid(), incidentId, userSub, "Added router basename + updated Allowed Web Origins; retesting.", userLabel]
+    );
 
-  await audit(userSub, "seed", "system", "seed", { created: true });
+    await audit(userSub, "seed", "system", "seed", { created: true });
+  }
 }
